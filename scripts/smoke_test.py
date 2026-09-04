@@ -1,13 +1,16 @@
 """Local smoke test: auth -> shop -> product -> invoice -> payment -> get invoice."""
 from __future__ import annotations
 
+import os
 import sys
 from datetime import date
 
 import httpx
 
-BASE = "http://127.0.0.1:8000"
+BASE = os.environ.get("SMOKE_BASE", "http://127.0.0.1:8000").rstrip("/")
 API = f"{BASE}/api"
+ADMIN_EMAIL = os.environ.get("SMOKE_EMAIL", "admin@example.com")
+ADMIN_PASSWORD = os.environ.get("SMOKE_PASSWORD", "ChangeMe123!")
 failures: list[str] = []
 
 
@@ -28,15 +31,15 @@ def main() -> int:
     check("health", r.status_code == 200 and r.json().get("status") == "ok", r.text)
 
     # Login (seed admin)
-    r = client.post(f"{API}/auth/login", json={"email": "admin@example.com", "password": "ChangeMe123!"})
+    r = client.post(f"{API}/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD})
     if r.status_code != 200:
         # try signup if seed missing
         r2 = client.post(
             f"{API}/auth/signup",
-            json={"email": "admin@example.com", "password": "ChangeMe123!", "full_name": "Admin"},
+            json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD, "full_name": "Admin"},
         )
         check("signup fallback", r2.status_code in (200, 201), r2.text)
-        r = client.post(f"{API}/auth/login", json={"email": "admin@example.com", "password": "ChangeMe123!"})
+        r = client.post(f"{API}/auth/login", json={"email": ADMIN_EMAIL, "password": ADMIN_PASSWORD})
     check("login", r.status_code == 200, r.text)
     if r.status_code != 200:
         return 1
