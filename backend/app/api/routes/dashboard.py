@@ -115,3 +115,31 @@ def recent_invoices(
     if role != AppRole.admin:
         query = query.filter(Invoice.created_by == current_user.id)
     return [serialize_invoice(inv, db) for inv in query.all()]
+
+
+@router.get("/pending-payments", response_model=list[InvoiceOut])
+def pending_payments(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[InvoiceOut]:
+    from sqlalchemy.orm import joinedload
+
+    query = (
+        db.query(Invoice)
+        .options(
+            joinedload(Invoice.items),
+            joinedload(Invoice.payments),
+            joinedload(Invoice.shop),
+        )
+        .join(Shop, Invoice.shop_id == Shop.id)
+        .filter(
+            Shop.is_frozen.is_(False),
+            Invoice.payment_status.in_([PaymentStatus.unpaid, PaymentStatus.partial]),
+        )
+        .order_by(Invoice.created_at.desc())
+        .limit(8)
+    )
+    role = current_user.role.role if current_user.role else AppRole.sales
+    if role != AppRole.admin:
+        query = query.filter(Invoice.created_by == current_user.id)
+    return [serialize_invoice(inv, db) for inv in query.all()]
