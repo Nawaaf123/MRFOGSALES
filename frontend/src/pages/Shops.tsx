@@ -22,7 +22,8 @@ import {
 import { useAuth } from "@/lib/auth";
 import { api, ApiError } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
-import { Edit, Mail, MapPin, Phone, Plus, Snowflake, Sun } from "lucide-react";
+import { BulkUploadDialog } from "@/components/shops/BulkUploadDialog";
+import { Edit, Mail, MapPin, Phone, Plus, Snowflake, Sun, Upload } from "lucide-react";
 
 type Shop = {
   id: string;
@@ -105,6 +106,7 @@ const Shops = () => {
 
   const [search, setSearch] = useState("");
   const [open, setOpen] = useState(false);
+  const [bulkOpen, setBulkOpen] = useState(false);
   const [editing, setEditing] = useState<Shop | null>(null);
   const [form, setForm] = useState<ShopFormState>(emptyForm);
 
@@ -197,10 +199,16 @@ const Shops = () => {
             <p className="text-muted-foreground">Retail accounts and customer contacts</p>
           </div>
           {canManage && (
-            <Button onClick={openCreate}>
-              <Plus className="h-4 w-4 mr-2" />
-              Add Shop
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" onClick={() => setBulkOpen(true)}>
+                <Upload className="h-4 w-4 mr-2" />
+                Bulk Import
+              </Button>
+              <Button onClick={openCreate}>
+                <Plus className="h-4 w-4 mr-2" />
+                Add Shop
+              </Button>
+            </div>
           )}
         </div>
 
@@ -209,6 +217,12 @@ const Shops = () => {
           value={search}
           onChange={(e) => setSearch(e.target.value)}
           className="max-w-md"
+        />
+
+        <BulkUploadDialog
+          open={bulkOpen}
+          onOpenChange={setBulkOpen}
+          onSuccess={() => queryClient.invalidateQueries({ queryKey: ["shops"] })}
         />
 
         <div className="rounded-md border">

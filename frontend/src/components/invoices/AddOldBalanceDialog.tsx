@@ -27,9 +27,16 @@ import {
 } from "@/components/ui/popover";
 import { Check, ChevronsUpDown } from "lucide-react";
 import { cn } from "@/lib/utils";
-import { supabase } from "@/integrations/supabase/client";
+import { api, ApiError } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth";
+
+type ShopOption = {
+  id: string;
+  name: string;
+  city?: string | null;
+  state?: string | null;
+};
 
 interface AddOldBalanceDialogProps {
   open: boolean;
@@ -52,14 +59,7 @@ export const AddOldBalanceDialog = ({
 
   const { data: shops } = useQuery({
     queryKey: ["shops-for-balance"],
-    queryFn: async () => {
-      const { data, error } = await supabase
-        .from("shops")
-        .select("id, name, city, state")
-        .order("name");
-      if (error) throw error;
-      return data;
-    },
+    queryFn: () => api<ShopOption[]>("/shops"),
     enabled: open,
   });
 
@@ -67,36 +67,26 @@ export const AddOldBalanceDialog = ({
 
   const createOldBalanceMutation = useMutation({
     mutationFn: async () => {
-      if (!user?.id) throw new Error("User not authenticated");
-      if (!selectedShopId) throw new Error("Please select a shop");
-      if (!amount || parseFloat(amount) <= 0) throw new Error("Please enter a valid amount");
+      if (!user?.id) throw { message: "User not authenticated" } satisfies ApiError;
+      if (!selectedShopId) throw { message: "Please select a shop" } satisfies ApiError;
+      const parsed = parseFloat(amount);
+      if (!parsed || parsed <= 0) {
+        throw { message: "Please enter a valid amount" } satisfies ApiError;
+      }
 
-      // Generate invoice number
-      const { data: invoiceNumber, error: invoiceNumberError } = await supabase
-        .rpc("generate_invoice_number");
-      
-      if (invoiceNumberError) throw invoiceNumberError;
-
-      // Create the old balance invoice (no invoice items needed)
-      const { data: invoice, error: invoiceError } = await supabase
-        .from("invoices")
-        .insert({
+      return api("/invoices/legacy-balance", {
+        method: "POST",
+        body: JSON.stringify({
           shop_id: selectedShopId,
-          created_by: user.id,
-          invoice_number: invoiceNumber,
-          total_amount: parseFloat(amount),
-          payment_status: "unpaid",
-          notes: notes ? `[LEGACY BALANCE] ${notes}` : "[LEGACY BALANCE] Opening balance from previous records",
-        })
-        .select()
-        .single();
-
-      if (invoiceError) throw invoiceError;
-
-      return invoice;
+          amount: parsed,
+          notes: notes.trim() || null,
+        }),
+      });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["invoices"] });
+      queryClient.invalidateQueries({ queryKey: ["pending-payments"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
       toast({
         title: "Success",
         description: `Old balance of $${parseFloat(amount).toFixed(2)} added for ${selectedShop?.name}`,
@@ -107,7 +97,7 @@ export const AddOldBalanceDialog = ({
       onOpenChange(false);
       onSuccess?.();
     },
-    onError: (error: Error) => {
+    onError: (error: ApiError) => {
       toast({
         title: "Error",
         description: error.message || "Failed to add old balance",
@@ -185,7 +175,7 @@ export const AddOldBalanceDialog = ({
                 </PopoverContent>
               </Popover>
             </div>
-            
+
             <div className="space-y-2">
               <Label htmlFor="balance-amount">Old Balance Amount ($)</Label>
               <Input

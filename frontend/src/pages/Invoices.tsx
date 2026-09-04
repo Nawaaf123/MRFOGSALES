@@ -31,7 +31,11 @@ import {
 import { useAuth } from "@/lib/auth";
 import { api, ApiError } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
-import { DollarSign, Plus, Trash2 } from "lucide-react";
+import { generateInvoicePDF, saveInvoicePDF } from "@/lib/pdfGenerator";
+import { CreditDialog } from "@/components/invoices/CreditDialog";
+import { AddOldBalanceDialog } from "@/components/invoices/AddOldBalanceDialog";
+import { DistributePaymentDialog } from "@/components/invoices/DistributePaymentDialog";
+import { DollarSign, Download, Gift, Mail, Plus, SplitSquareVertical, Trash2 } from "lucide-react";
 
 type Shop = {
   id: string;
@@ -66,6 +70,19 @@ type InvoiceItem = {
   subtotal: number;
 };
 
+type InvoiceShop = {
+  id: string;
+  name: string;
+  owner_name?: string | null;
+  street_address?: string | null;
+  street_address_line_2?: string | null;
+  city?: string | null;
+  state?: string | null;
+  zip_code?: string | null;
+  phone?: string | null;
+  email?: string | null;
+};
+
 type Invoice = {
   id: string;
   invoice_number: string;
@@ -78,9 +95,42 @@ type Invoice = {
   created_at: string;
   items: InvoiceItem[];
   payments: InvoicePayment[];
-  shop: { id: string; name: string } | null;
+  shop: InvoiceShop | null;
   amount_paid: number;
 };
+
+function toPdfInvoice(invoice: Invoice) {
+  const shop = invoice.shop;
+  return {
+    ...invoice,
+    notes: invoice.notes || undefined,
+    shops: shop
+      ? {
+          name: shop.name,
+          owner_name: shop.owner_name || undefined,
+          street_address: shop.street_address || undefined,
+          street_address_line_2: shop.street_address_line_2 || undefined,
+          city: shop.city || undefined,
+          state: shop.state || undefined,
+          zip_code: shop.zip_code || undefined,
+          phone: shop.phone || undefined,
+          email: shop.email || undefined,
+        }
+      : { name: "Unknown shop" },
+  };
+}
+
+async function downloadInvoicePdf(invoice: Invoice) {
+  const paid = Number(invoice.amount_paid || 0);
+  const remaining = Math.max(0, Number(invoice.total_amount) - paid);
+  await saveInvoicePDF(toPdfInvoice(invoice), paid, remaining);
+}
+
+function pdfDocToBase64(doc: { output: (type: string) => string }): string {
+  const dataUri = doc.output("datauristring");
+  const comma = dataUri.indexOf(",");
+  return comma >= 0 ? dataUri.slice(comma + 1) : dataUri;
+}
 
 type LineItemDraft = {
   product_id: string;
@@ -124,6 +174,18 @@ const Invoices = () => {
   const [payCheckNumber, setPayCheckNumber] = useState("");
   const [payNotes, setPayNotes] = useState("");
 
+  const [oldBalanceOpen, setOldBalanceOpen] = useState(false);
+  const [creditInvoice, setCreditInvoice] = useState<Invoice | null>(null);
+  const [emailingId, setEmailingId] = useState<string | null>(null);
+
+  const [shopPickerOpen, setShopPickerOpen] = useState(false);
+  const [distributeTarget, setDistributeTarget] = useState<{
+    shopId: string;
+    shopName: string;
+    invoices: Invoice[];
+    totalPending: number;
+  } | null>(null);
+
   const invoiceQueryParams = useMemo(() => {
     const params = new URLSearchParams();
     if (search.trim()) params.set("search", search.trim());
@@ -148,6 +210,44 @@ const Invoices = () => {
     queryFn: () => api<Product[]>("/products?active_only=true"),
     enabled: createOpen,
   });
+
+  const { data: pendingInvoices = [], isLoading: pendingLoading } = useQuery({
+    queryKey: ["invoices", "pending-for-distribute"],
+    queryFn: async () => {
+      const [unpaid, partial] = await Promise.all([
+        api<Invoice[]>("/invoices?payment_status=unpaid"),
+        api<Invoice[]>("/invoices?payment_status=partial"),
+      ]);
+      return [...unpaid, ...partial];
+    },
+    enabled: shopPickerOpen || !!distributeTarget,
+  });
+
+  const shopsWithPending = useMemo(() => {
+    const map = new Map<
+      string,
+      { shopId: string; shopName: string; invoices: Invoice[]; totalPending: number }
+    >();
+    for (const invoice of pendingInvoices) {
+      const shopId = invoice.shop_id || invoice.shop?.id;
+      if (!shopId) continue;
+      const remaining = Math.max(0, Number(invoice.total_amount) - Number(invoice.amount_paid || 0));
+      if (remaining <= 0.01) continue;
+      const existing = map.get(shopId);
+      if (existing) {
+        existing.invoices.push(invoice);
+        existing.totalPending += remaining;
+      } else {
+        map.set(shopId, {
+          shopId,
+          shopName: invoice.shop?.name || "Unknown shop",
+          invoices: [invoice],
+          totalPending: remaining,
+        });
+      }
+    }
+    return Array.from(map.values()).sort((a, b) => b.totalPending - a.totalPending);
+  }, [pendingInvoices]);
 
   const subtotal = items.reduce((sum, item) => sum + item.subtotal, 0);
   const discount = Number(discountAmount) || 0;
@@ -280,6 +380,7 @@ const Invoices = () => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["invoices"] });
       queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
+      queryClient.invalidateQueries({ queryKey: ["pending-payments"] });
       setPaymentInvoice(null);
       setPayAmount("");
       setPayMethod("cash");
@@ -296,6 +397,61 @@ const Invoices = () => {
     ? Math.max(0, Number(paymentInvoice.total_amount) - Number(paymentInvoice.amount_paid || 0))
     : 0;
 
+  const creditRemaining = creditInvoice
+    ? Math.max(0, Number(creditInvoice.total_amount) - Number(creditInvoice.amount_paid || 0))
+    : 0;
+
+  const emailInvoice = async (invoice: Invoice) => {
+    setEmailingId(invoice.id);
+    try {
+      const full = await api<Invoice>(`/invoices/${invoice.id}`);
+      let to = full.shop?.email?.trim() || "";
+      if (!to) {
+        const prompted = window.prompt(
+          `No email on file for ${full.shop?.name || "this shop"}. Enter recipient email:`
+        );
+        if (!prompted?.trim()) {
+          toast({ title: "Email cancelled", description: "No recipient email provided" });
+          return;
+        }
+        to = prompted.trim();
+      }
+
+      const paid = Number(full.amount_paid || 0);
+      const remaining = Math.max(0, Number(full.total_amount) - paid);
+      const doc = await generateInvoicePDF(toPdfInvoice(full), paid, remaining);
+      const pdf_base64 = pdfDocToBase64(doc);
+
+      await api(`/invoices/${full.id}/email`, {
+        method: "POST",
+        body: JSON.stringify({ to, pdf_base64 }),
+      });
+
+      toast({
+        title: "Invoice emailed",
+        description: `Sent to ${to}`,
+      });
+    } catch (error: unknown) {
+      const apiError = error as ApiError;
+      if (apiError?.status === 503) {
+        toast({
+          title: "Email unavailable",
+          description:
+            "Email sending is not configured on the server. Ask an admin to set RESEND_API_KEY.",
+          variant: "destructive",
+        });
+      } else {
+        toast({
+          title: "Email failed",
+          description: apiError?.message || "Could not email invoice",
+          variant: "destructive",
+        });
+      }
+    } finally {
+      setEmailingId(null);
+    }
+  };
+
   return (
     <DashboardLayout>
       <div className="space-y-4">
@@ -305,15 +461,24 @@ const Invoices = () => {
             <p className="text-muted-foreground">Create invoices, track balances, and record payments</p>
           </div>
           {canCreate && (
-            <Button
-              onClick={() => {
-                resetCreateForm();
-                setCreateOpen(true);
-              }}
-            >
-              <Plus className="h-4 w-4 mr-2" />
-              New Invoice
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <Button variant="outline" onClick={() => setShopPickerOpen(true)}>
+                <SplitSquareVertical className="h-4 w-4 mr-2" />
+                Distribute by Shop
+              </Button>
+              <Button variant="outline" onClick={() => setOldBalanceOpen(true)}>
+                Old Balance
+              </Button>
+              <Button
+                onClick={() => {
+                  resetCreateForm();
+                  setCreateOpen(true);
+                }}
+              >
+                <Plus className="h-4 w-4 mr-2" />
+                New Invoice
+              </Button>
+            </div>
           )}
         </div>
 
@@ -371,17 +536,17 @@ const Invoices = () => {
                 <TableHead>Paid</TableHead>
                 <TableHead>Remaining</TableHead>
                 <TableHead>Created</TableHead>
-                {canCreate && <TableHead className="text-right">Actions</TableHead>}
+                <TableHead className="text-right">Actions</TableHead>
               </TableRow>
             </TableHeader>
             <TableBody>
               {isLoading ? (
                 <TableRow>
-                  <TableCell colSpan={canCreate ? 8 : 7}>Loading...</TableCell>
+                  <TableCell colSpan={8}>Loading...</TableCell>
                 </TableRow>
               ) : invoices.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={canCreate ? 8 : 7}>No invoices found</TableCell>
+                  <TableCell colSpan={8}>No invoices found</TableCell>
                 </TableRow>
               ) : (
                 invoices.map((invoice) => {
@@ -402,26 +567,70 @@ const Invoices = () => {
                         ${remaining.toFixed(2)}
                       </TableCell>
                       <TableCell>{new Date(invoice.created_at).toLocaleString()}</TableCell>
-                      {canCreate && (
-                        <TableCell className="text-right">
-                          {remaining > 0.01 && (
+                      <TableCell className="text-right">
+                        <div className="flex justify-end flex-wrap gap-2">
+                          <Button
+                            variant="outline"
+                            size="sm"
+                            onClick={async () => {
+                              try {
+                                const full = await api<Invoice>(`/invoices/${invoice.id}`);
+                                await downloadInvoicePdf(full);
+                              } catch (error: unknown) {
+                                const message =
+                                  error && typeof error === "object" && "message" in error
+                                    ? String((error as ApiError).message)
+                                    : "Could not generate PDF";
+                                toast({
+                                  title: "PDF failed",
+                                  description: message,
+                                  variant: "destructive",
+                                });
+                              }
+                            }}
+                          >
+                            <Download className="h-4 w-4 mr-1" />
+                            PDF
+                          </Button>
+                          {canCreate && (
                             <Button
                               variant="outline"
                               size="sm"
-                              onClick={() => {
-                                setPaymentInvoice(invoice);
-                                setPayAmount(remaining.toFixed(2));
-                                setPayMethod("cash");
-                                setPayCheckNumber("");
-                                setPayNotes("");
-                              }}
+                              disabled={emailingId === invoice.id}
+                              onClick={() => emailInvoice(invoice)}
                             >
-                              <DollarSign className="h-4 w-4 mr-1" />
-                              Pay
+                              <Mail className="h-4 w-4 mr-1" />
+                              {emailingId === invoice.id ? "Sending..." : "Email"}
                             </Button>
                           )}
-                        </TableCell>
-                      )}
+                          {canCreate && remaining > 0.01 && (
+                            <>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => setCreditInvoice(invoice)}
+                              >
+                                <Gift className="h-4 w-4 mr-1" />
+                                Credit
+                              </Button>
+                              <Button
+                                variant="outline"
+                                size="sm"
+                                onClick={() => {
+                                  setPaymentInvoice(invoice);
+                                  setPayAmount(remaining.toFixed(2));
+                                  setPayMethod("cash");
+                                  setPayCheckNumber("");
+                                  setPayNotes("");
+                                }}
+                              >
+                                <DollarSign className="h-4 w-4 mr-1" />
+                                Pay
+                              </Button>
+                            </>
+                          )}
+                        </div>
+                      </TableCell>
                     </TableRow>
                   );
                 })
@@ -687,6 +896,71 @@ const Invoices = () => {
           </div>
         </DialogContent>
       </Dialog>
+
+      <AddOldBalanceDialog open={oldBalanceOpen} onOpenChange={setOldBalanceOpen} />
+
+      {creditInvoice && (
+        <CreditDialog
+          open={!!creditInvoice}
+          onOpenChange={(open) => !open && setCreditInvoice(null)}
+          invoice={creditInvoice}
+          remainingAmount={creditRemaining}
+        />
+      )}
+
+      <Dialog open={shopPickerOpen} onOpenChange={setShopPickerOpen}>
+        <DialogContent className="max-w-md">
+          <DialogHeader>
+            <DialogTitle>Distribute by Shop</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-3 max-h-[60vh] overflow-y-auto">
+            {pendingLoading ? (
+              <p className="text-sm text-muted-foreground">Loading pending balances...</p>
+            ) : shopsWithPending.length === 0 ? (
+              <p className="text-sm text-muted-foreground">No shops with unpaid invoices</p>
+            ) : (
+              shopsWithPending.map((shop) => (
+                <button
+                  key={shop.shopId}
+                  type="button"
+                  className="w-full text-left rounded-md border p-3 hover:bg-muted/50 transition-colors"
+                  onClick={() => {
+                    setShopPickerOpen(false);
+                    setDistributeTarget(shop);
+                  }}
+                >
+                  <div className="flex items-center justify-between gap-3">
+                    <div>
+                      <p className="font-medium">{shop.shopName}</p>
+                      <p className="text-xs text-muted-foreground">
+                        {shop.invoices.length} unpaid/partial invoice
+                        {shop.invoices.length === 1 ? "" : "s"}
+                      </p>
+                    </div>
+                    <p className="font-semibold text-orange-600">
+                      ${shop.totalPending.toFixed(2)}
+                    </p>
+                  </div>
+                </button>
+              ))
+            )}
+          </div>
+        </DialogContent>
+      </Dialog>
+
+      {distributeTarget && (
+        <DistributePaymentDialog
+          open={!!distributeTarget}
+          onOpenChange={(open) => !open && setDistributeTarget(null)}
+          shopId={distributeTarget.shopId}
+          shopName={distributeTarget.shopName}
+          invoices={distributeTarget.invoices}
+          totalPending={distributeTarget.totalPending}
+          onRefetch={() => {
+            queryClient.invalidateQueries({ queryKey: ["invoices"] });
+          }}
+        />
+      )}
     </DashboardLayout>
   );
 };

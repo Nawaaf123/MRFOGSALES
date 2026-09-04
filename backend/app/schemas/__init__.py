@@ -138,6 +138,7 @@ class ShopOut(ORMModel):
     zip_code: str | None
     is_frozen: bool
     created_by: UUID | None
+    retailer_user_id: UUID | None = None
     created_at: datetime
     updated_at: datetime
 
@@ -288,6 +289,117 @@ class DashboardStats(BaseModel):
     unpaid_invoices: int = 0
 
 
+class AnalyticsOverview(BaseModel):
+    invoice_count: int
+    revenue: float
+    discounts: float
+    collected: float
+    collection_rate: float
+    paid_count: int
+    unpaid_count: int
+    partial_count: int
+    unique_shops: int
+    units_sold: int
+    average_invoice: float
+
+
+class ProductSalesRow(BaseModel):
+    product_name: str
+    total_quantity: int
+    total_revenue: float
+
+
+class ShopSalesRow(BaseModel):
+    shop_name: str
+    invoice_count: int
+    total_revenue: float
+
+
+class CategorySalesRow(BaseModel):
+    category: str
+    total_quantity: int
+    total_revenue: float
+
+
+class DailySalesRow(BaseModel):
+    date: str
+    invoice_count: int
+    revenue: float
+
+
+class SalesPersonPerformance(BaseModel):
+    user_id: UUID
+    full_name: str
+    email: EmailStr
+    invoice_count: int
+    total_revenue: float
+    unique_shops: int
+    average_invoice: float
+    commission: float
+
+
+class LegacyBalanceCreate(BaseModel):
+    shop_id: UUID
+    amount: float = Field(gt=0)
+    notes: str | None = None
+
+
+class InvoiceEmailRequest(BaseModel):
+    to: EmailStr | None = None
+    pdf_base64: str = Field(min_length=1)
+
+
+class DistributePaymentRequest(BaseModel):
+    shop_id: UUID
+    amount: float = Field(gt=0)
+    payment_method: PaymentMethod
+    payment_date: date | None = None
+    check_number: str | None = None
+    notes: str | None = None
+
+
+class DistributePaymentResult(BaseModel):
+    payments_created: int
+    amount_applied: float
+
+
+class RetailerSignupCreate(BaseModel):
+    email: EmailStr
+    full_name: str = Field(min_length=1)
+    phone: str | None = None
+    requested_shop_name: str = Field(min_length=1)
+    message: str | None = None
+    password: str = Field(min_length=6)
+
+
+class RetailerSignupOut(ORMModel):
+    id: UUID
+    email: EmailStr
+    full_name: str
+    phone: str | None
+    requested_shop_name: str
+    message: str | None
+    status: str
+    shop_id: UUID | None
+    user_id: UUID | None
+    created_at: datetime
+    reviewed_at: datetime | None
+
+
+class RetailerSignupApprove(BaseModel):
+    shop_id: UUID
+
+
+class LowStockProduct(ORMModel):
+    id: UUID
+    name: str
+    category: str
+    stock_quantity: int
+    stock_quantity_b: int
+    low_stock_threshold: int
+    total_stock: int
+
+
 class LocationUpdate(BaseModel):
     latitude: float
     longitude: float
@@ -301,3 +413,5 @@ class LocationOut(ORMModel):
     longitude: float
     accuracy: float | None
     updated_at: datetime
+    full_name: str | None = None
+    email: str | None = None

@@ -2,10 +2,11 @@ from datetime import date, datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import func, or_
+from sqlalchemy import case, func, or_
 from sqlalchemy.orm import Session, joinedload
 
 from app.api.deps import get_current_user, require_roles
+from app.core.config import get_settings
 from app.db.session import get_db
 from app.models import (
     AppRole,
@@ -17,7 +18,17 @@ from app.models import (
     Shop,
     User,
 )
-from app.schemas import InvoiceCreate, InvoiceOut, PaymentCreate, PaymentOut, ShopBrief
+from app.schemas import (
+    DistributePaymentRequest,
+    DistributePaymentResult,
+    InvoiceCreate,
+    InvoiceEmailRequest,
+    InvoiceOut,
+    LegacyBalanceCreate,
+    PaymentCreate,
+    PaymentOut,
+    ShopBrief,
+)
 
 router = APIRouter(tags=["invoices"])
 
@@ -216,6 +227,171 @@ def get_invoice(
     return serialize_invoice(invoice, db)
 
 
+@router.post("/invoices/legacy-balance", response_model=InvoiceOut, status_code=status.HTTP_201_CREATED)
+def create_legacy_balance(
+    payload: LegacyBalanceCreate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(AppRole.admin, AppRole.sales, AppRole.srour)),
+) -> InvoiceOut:
+    shop = db.query(Shop).filter(Shop.id == payload.shop_id, Shop.is_frozen.is_(False)).first()
+    if not shop:
+        raise HTTPException(status_code=404, detail="Shop not found")
+
+    note = payload.notes.strip() if payload.notes else "Opening balance from previous records"
+    if not note.upper().startswith("[LEGACY BALANCE]"):
+        note = f"[LEGACY BALANCE] {note}"
+
+    invoice = Invoice(
+        invoice_number=next_invoice_number(db),
+        shop_id=payload.shop_id,
+        created_by=current_user.id,
+        total_amount=payload.amount,
+        discount_amount=0,
+        notes=note,
+        payment_status=PaymentStatus.unpaid,
+    )
+    db.add(invoice)
+    db.commit()
+    loaded = load_invoice(db, invoice.id)
+    assert loaded is not None
+    return serialize_invoice(loaded, db)
+
+
+@router.post("/invoices/{invoice_id}/email")
+def email_invoice(
+    invoice_id: UUID,
+    payload: InvoiceEmailRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(AppRole.admin, AppRole.sales, AppRole.srour)),
+) -> dict:
+    import httpx
+
+    settings = get_settings()
+    if not settings.resend_api_key:
+        raise HTTPException(
+            status_code=503,
+            detail="Email is not configured. Set RESEND_API_KEY in the API environment.",
+        )
+
+    invoice = load_invoice(db, invoice_id)
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+
+    role = current_user.role.role if current_user.role else AppRole.sales
+    if role not in (AppRole.admin, AppRole.srour) and invoice.created_by != current_user.id:
+        raise HTTPException(status_code=403, detail="Forbidden")
+
+    to_email = payload.to or (invoice.shop.email if invoice.shop else None)
+    if not to_email:
+        raise HTTPException(status_code=400, detail="No recipient email provided or on shop")
+
+    shop_name = invoice.shop.name if invoice.shop else "Customer"
+    html = f"""
+    <div style="font-family: Arial, sans-serif; max-width: 600px; margin: 0 auto;">
+      <h2>Invoice {invoice.invoice_number}</h2>
+      <p>Dear {shop_name},</p>
+      <p>Thank you for your business. Please find your invoice attached.</p>
+      <p><strong>Invoice Number:</strong> {invoice.invoice_number}<br/>
+      <strong>Total Amount:</strong> ${float(invoice.total_amount):.2f}</p>
+      <p>Best regards,<br/>Sales Team</p>
+    </div>
+    """
+
+    response = httpx.post(
+        "https://api.resend.com/emails",
+        headers={
+            "Authorization": f"Bearer {settings.resend_api_key}",
+            "Content-Type": "application/json",
+        },
+        json={
+            "from": settings.email_from,
+            "to": [str(to_email)],
+            "subject": f"Invoice {invoice.invoice_number}",
+            "html": html,
+            "attachments": [
+                {
+                    "filename": f"Invoice-{invoice.invoice_number}.pdf",
+                    "content": payload.pdf_base64,
+                }
+            ],
+        },
+        timeout=30.0,
+    )
+    if response.status_code >= 400:
+        raise HTTPException(status_code=502, detail=f"Email provider error: {response.text}")
+    return {"ok": True, "provider": response.json()}
+
+
+@router.post("/payments/distribute", response_model=DistributePaymentResult)
+def distribute_payment(
+    payload: DistributePaymentRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(AppRole.admin, AppRole.sales, AppRole.srour)),
+) -> DistributePaymentResult:
+    shop = db.query(Shop).filter(Shop.id == payload.shop_id, Shop.is_frozen.is_(False)).first()
+    if not shop:
+        raise HTTPException(status_code=404, detail="Shop not found")
+
+    invoices = (
+        db.query(Invoice)
+        .options(joinedload(Invoice.payments))
+        .filter(
+            Invoice.shop_id == payload.shop_id,
+            Invoice.payment_status.in_([PaymentStatus.unpaid, PaymentStatus.partial]),
+        )
+        .order_by(
+            case((Invoice.payment_status == PaymentStatus.unpaid, 0), else_=1),
+            Invoice.created_at.asc(),
+        )
+        .all()
+    )
+    if not invoices:
+        raise HTTPException(status_code=400, detail="No unpaid invoices for this shop")
+
+    total_pending = 0.0
+    pending_by_invoice: list[tuple[Invoice, float]] = []
+    for invoice in invoices:
+        paid = sum(float(p.amount) for p in (invoice.payments or []))
+        pending = max(float(invoice.total_amount or 0) - paid, 0)
+        if pending > 0:
+            pending_by_invoice.append((invoice, pending))
+            total_pending += pending
+
+    if payload.amount > total_pending + 0.01:
+        raise HTTPException(status_code=400, detail="Payment exceeds total pending balance")
+
+    remaining = payload.amount
+    created = 0
+    pay_date = payload.payment_date or date.today()
+    for invoice, pending in pending_by_invoice:
+        if remaining <= 0:
+            break
+        apply_amount = min(remaining, pending)
+        db.add(
+            Payment(
+                invoice_id=invoice.id,
+                amount=apply_amount,
+                payment_method=payload.payment_method,
+                payment_date=pay_date,
+                check_number=payload.check_number if payload.payment_method.value == "check" else None,
+                notes=payload.notes,
+                created_by=current_user.id,
+            )
+        )
+        remaining -= apply_amount
+        created += 1
+
+    db.flush()
+    for invoice, _ in pending_by_invoice:
+        refresh_payment_status(db, invoice)
+    db.commit()
+
+    return DistributePaymentResult(
+        payments_created=created,
+        amount_applied=payload.amount - remaining,
+    )
+
+
 @router.post("/payments", response_model=PaymentOut, status_code=status.HTTP_201_CREATED)
 def create_payment(
     payload: PaymentCreate,
@@ -225,6 +401,15 @@ def create_payment(
     invoice = db.query(Invoice).filter(Invoice.id == payload.invoice_id).first()
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found")
+
+    remaining = float(invoice.total_amount or 0) - float(
+        db.query(func.coalesce(func.sum(Payment.amount), 0))
+        .filter(Payment.invoice_id == invoice.id)
+        .scalar()
+        or 0
+    )
+    if payload.amount > remaining + 0.01:
+        raise HTTPException(status_code=400, detail="Payment/credit cannot exceed remaining balance")
 
     payment = Payment(
         invoice_id=payload.invoice_id,

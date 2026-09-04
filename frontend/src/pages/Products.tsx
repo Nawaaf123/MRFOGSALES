@@ -39,6 +39,7 @@ import {
 import { useAuth } from "@/lib/auth";
 import { api, ApiError } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
+import { BulkProductUploadDialog } from "@/components/products/BulkProductUploadDialog";
 import { Edit, Plus, Power } from "lucide-react";
 
 type Product = {
@@ -218,10 +219,13 @@ const Products = () => {
             <p className="text-muted-foreground">Manage catalog and warehouse stock</p>
           </div>
           {canManage && (
-            <Button onClick={openCreate}>
-              <Plus className="h-4 w-4 mr-2" />
-              Add Product
-            </Button>
+            <div className="flex flex-wrap gap-2">
+              <BulkProductUploadDialog categoryFilter={categoryFilter} />
+              <Button onClick={openCreate}>
+                <Plus className="h-4 w-4 mr-2" />
+                Add Product
+              </Button>
+            </div>
           )}
         </div>
 

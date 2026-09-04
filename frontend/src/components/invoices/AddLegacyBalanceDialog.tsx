@@ -11,7 +11,7 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { supabase } from "@/integrations/supabase/client";
+import { api, ApiError } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth";
 
@@ -38,35 +38,25 @@ export const AddLegacyBalanceDialog = ({
 
   const createLegacyBalanceMutation = useMutation({
     mutationFn: async () => {
-      if (!user?.id) throw new Error("User not authenticated");
-      if (!amount || parseFloat(amount) <= 0) throw new Error("Please enter a valid amount");
+      if (!user?.id) throw { message: "User not authenticated" } satisfies ApiError;
+      const parsed = parseFloat(amount);
+      if (!parsed || parsed <= 0) {
+        throw { message: "Please enter a valid amount" } satisfies ApiError;
+      }
 
-      // Generate invoice number
-      const { data: invoiceNumber, error: invoiceNumberError } = await supabase
-        .rpc("generate_invoice_number");
-      
-      if (invoiceNumberError) throw invoiceNumberError;
-
-      // Create the legacy balance invoice (no invoice items needed for legacy balance)
-      const { data: invoice, error: invoiceError } = await supabase
-        .from("invoices")
-        .insert({
+      return api("/invoices/legacy-balance", {
+        method: "POST",
+        body: JSON.stringify({
           shop_id: shopId,
-          created_by: user.id,
-          invoice_number: invoiceNumber,
-          total_amount: parseFloat(amount),
-          payment_status: "unpaid",
-          notes: notes ? `[LEGACY BALANCE] ${notes}` : "[LEGACY BALANCE] Opening balance from previous records",
-        })
-        .select()
-        .single();
-
-      if (invoiceError) throw invoiceError;
-
-      return invoice;
+          amount: parsed,
+          notes: notes.trim() || null,
+        }),
+      });
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["invoices"] });
+      queryClient.invalidateQueries({ queryKey: ["pending-payments"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
       toast({
         title: "Success",
         description: "Legacy balance added successfully",
@@ -76,7 +66,7 @@ export const AddLegacyBalanceDialog = ({
       onOpenChange(false);
       onSuccess?.();
     },
-    onError: (error: Error) => {
+    onError: (error: ApiError) => {
       toast({
         title: "Error",
         description: error.message || "Failed to add legacy balance",
@@ -102,7 +92,7 @@ export const AddLegacyBalanceDialog = ({
               <Label className="text-sm text-muted-foreground">Shop</Label>
               <p className="font-medium">{shopName}</p>
             </div>
-            
+
             <div className="space-y-2">
               <Label htmlFor="amount">Old Balance Amount ($)</Label>
               <Input

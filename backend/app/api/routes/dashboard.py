@@ -5,7 +5,8 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.models import AppRole, Invoice, Order, OrderStatus, PaymentStatus, Product, Shop, User
-from app.schemas import DashboardStats
+from app.schemas import DashboardStats, InvoiceOut, LowStockProduct
+from app.api.routes.invoices import serialize_invoice
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
 
@@ -64,3 +65,53 @@ def dashboard_stats(
         pending_orders=pending_orders,
         unpaid_invoices=unpaid_invoices,
     )
+
+
+@router.get("/low-stock", response_model=list[LowStockProduct])
+def low_stock(
+    db: Session = Depends(get_db),
+    _: User = Depends(get_current_user),
+) -> list[LowStockProduct]:
+    products = db.query(Product).filter(Product.is_active.is_(True)).all()
+    rows: list[LowStockProduct] = []
+    for product in products:
+        total = int(product.stock_quantity or 0) + int(product.stock_quantity_b or 0)
+        if total <= int(product.low_stock_threshold or 0):
+            rows.append(
+                LowStockProduct(
+                    id=product.id,
+                    name=product.name,
+                    category=product.category,
+                    stock_quantity=int(product.stock_quantity or 0),
+                    stock_quantity_b=int(product.stock_quantity_b or 0),
+                    low_stock_threshold=int(product.low_stock_threshold or 0),
+                    total_stock=total,
+                )
+            )
+    rows.sort(key=lambda item: item.total_stock)
+    return rows[:8]
+
+
+@router.get("/recent-invoices", response_model=list[InvoiceOut])
+def recent_invoices(
+    db: Session = Depends(get_db),
+    current_user: User = Depends(get_current_user),
+) -> list[InvoiceOut]:
+    from sqlalchemy.orm import joinedload
+
+    query = (
+        db.query(Invoice)
+        .options(
+            joinedload(Invoice.items),
+            joinedload(Invoice.payments),
+            joinedload(Invoice.shop),
+        )
+        .join(Shop, Invoice.shop_id == Shop.id)
+        .filter(Shop.is_frozen.is_(False))
+        .order_by(Invoice.created_at.desc())
+        .limit(5)
+    )
+    role = current_user.role.role if current_user.role else AppRole.sales
+    if role != AppRole.admin:
+        query = query.filter(Invoice.created_by == current_user.id)
+    return [serialize_invoice(inv, db) for inv in query.all()]

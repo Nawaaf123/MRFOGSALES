@@ -11,14 +11,14 @@ import {
   DialogTitle,
   DialogDescription,
 } from "@/components/ui/dialog";
-import { supabase } from "@/integrations/supabase/client";
+import { api, ApiError } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth";
 
 interface CreditDialogProps {
   open: boolean;
   onOpenChange: (open: boolean) => void;
-  invoice: any;
+  invoice: { id: string };
   remainingAmount: number;
 }
 
@@ -36,53 +36,26 @@ export const CreditDialog = ({
 
   const mutation = useMutation({
     mutationFn: async () => {
+      if (!user?.id) throw { message: "User not authenticated" } satisfies ApiError;
+
       const creditAmount = parseFloat(amount);
-
       if (!creditAmount || creditAmount <= 0) {
-        throw new Error("Please enter a valid credit amount");
+        throw { message: "Please enter a valid credit amount" } satisfies ApiError;
       }
-
       if (creditAmount > remainingAmount) {
-        throw new Error("Credit cannot exceed remaining balance");
+        throw { message: "Credit cannot exceed remaining balance" } satisfies ApiError;
       }
 
-      const { error: paymentError } = await supabase
-        .from("payments")
-        .insert({
+      return api("/payments", {
+        method: "POST",
+        body: JSON.stringify({
           invoice_id: invoice.id,
           amount: creditAmount,
-          payment_method: "credit" as any,
-          notes: notes || null,
-          created_by: user?.id,
-        });
-
-      if (paymentError) throw paymentError;
-
-      const { data: payments } = await supabase
-        .from("payments")
-        .select("amount")
-        .eq("invoice_id", invoice.id);
-
-      const totalPaid = (payments || []).reduce(
-        (sum, p) => sum + Number(p.amount),
-        0
-      );
-
-      let newStatus: "paid" | "partial" | "unpaid";
-      if (totalPaid >= Number(invoice.total_amount)) {
-        newStatus = "paid";
-      } else if (totalPaid > 0) {
-        newStatus = "partial";
-      } else {
-        newStatus = "unpaid";
-      }
-
-      const { error: statusError } = await supabase
-        .from("invoices")
-        .update({ payment_status: newStatus })
-        .eq("id", invoice.id);
-
-      if (statusError) throw statusError;
+          payment_method: "credit",
+          payment_date: new Date().toISOString().slice(0, 10),
+          notes: notes.trim() || null,
+        }),
+      });
     },
     onSuccess: () => {
       toast({
@@ -91,12 +64,13 @@ export const CreditDialog = ({
       });
       queryClient.invalidateQueries({ queryKey: ["invoices"] });
       queryClient.invalidateQueries({ queryKey: ["payments"] });
-      queryClient.invalidateQueries({ queryKey: ["all-invoice-payments"] });
+      queryClient.invalidateQueries({ queryKey: ["pending-payments"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
       onOpenChange(false);
       setAmount("");
       setNotes("");
     },
-    onError: (error: any) => {
+    onError: (error: ApiError) => {
       toast({
         title: "Error",
         description: error.message || "Failed to apply credit",

@@ -1,39 +1,28 @@
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 import { format } from "date-fns";
-import { FileText, DollarSign } from "lucide-react";
+import { FileText } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 
-interface RecentActivityProps {
-  userId?: string;
-  isAdmin?: boolean;
-}
+type RecentInvoice = {
+  id: string;
+  invoice_number: string;
+  total_amount: number;
+  payment_status: string;
+  created_at: string;
+  shop: { id: string; name: string } | null;
+};
 
-export const RecentActivity = ({ userId, isAdmin }: RecentActivityProps) => {
+export const RecentActivity = () => {
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
+
   const { data: recentInvoices, isLoading } = useQuery({
-    queryKey: ["recent-invoices", userId, isAdmin],
-    queryFn: async () => {
-      let query = supabase
-        .from("invoices")
-        .select(`
-          *,
-          shops!inner (name, is_frozen)
-        `)
-        .eq("shops.is_frozen", false)
-        .order("created_at", { ascending: false })
-        .limit(5);
-      
-      // Filter by user if not admin
-      if (!isAdmin && userId) {
-        query = query.eq("created_by", userId);
-      }
-
-      const { data, error } = await query;
-      if (error) throw error;
-      return data;
-    },
-    enabled: !!userId,
+    queryKey: ["recent-invoices"],
+    queryFn: () => api<RecentInvoice[]>("/dashboard/recent-invoices"),
+    enabled: !!user?.id,
   });
 
   const getStatusColor = (status: string) => {
@@ -71,13 +60,19 @@ export const RecentActivity = ({ userId, isAdmin }: RecentActivityProps) => {
                   <div>
                     <p className="font-medium text-sm">{invoice.invoice_number}</p>
                     <p className="text-xs text-muted-foreground">
-                      {invoice.shops?.name} • {format(new Date(invoice.created_at), "MMM d, yyyy")}
+                      {invoice.shop?.name || "Unknown shop"} •{" "}
+                      {format(new Date(invoice.created_at), "MMM d, yyyy")}
                     </p>
                   </div>
                 </div>
                 <div className="text-right">
-                  <p className="font-semibold text-sm">${Number(invoice.total_amount).toFixed(2)}</p>
-                  <Badge variant={getStatusColor(invoice.payment_status)} className="text-xs mt-1">
+                  <p className="font-semibold text-sm">
+                    ${Number(invoice.total_amount).toFixed(2)}
+                  </p>
+                  <Badge
+                    variant={getStatusColor(invoice.payment_status)}
+                    className="text-xs mt-1 capitalize"
+                  >
                     {invoice.payment_status}
                   </Badge>
                 </div>

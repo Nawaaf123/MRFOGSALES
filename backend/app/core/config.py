@@ -15,6 +15,8 @@ class Settings(BaseSettings):
     seed_admin_email: str = "admin@example.com"
     seed_admin_password: str = "ChangeMe123!"
     seed_admin_name: str = "Admin"
+    resend_api_key: str = ""
+    email_from: str = "Sales <sales@mrfogsales.com>"
 
     @property
     def cors_origin_list(self) -> list[str]:

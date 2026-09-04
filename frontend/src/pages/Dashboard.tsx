@@ -12,7 +12,14 @@ import {
   AlertCircle,
 } from "lucide-react";
 import { StatsCard } from "@/components/dashboard/StatsCard";
+import { LowStockAlert } from "@/components/dashboard/LowStockAlert";
+import { PendingPayments } from "@/components/dashboard/PendingPayments";
+import { TopProducts } from "@/components/dashboard/TopProducts";
+import { TopShops } from "@/components/dashboard/TopShops";
+import { RecentActivity } from "@/components/dashboard/RecentActivity";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { LocationTracker } from "@/components/location/LocationTracker";
+import { SalesMap } from "@/components/location/SalesMap";
 
 type DashboardStats = {
   products_count: number;
@@ -124,6 +131,31 @@ const Dashboard = () => {
             </Card>
           </div>
         )}
+
+        <div className={`grid gap-4 ${isAdmin ? "md:grid-cols-2" : ""}`}>
+          <PendingPayments />
+          {isAdmin && <LowStockAlert />}
+        </div>
+
+        {isAdmin && (
+          <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+            <TopProducts />
+            <TopShops />
+            <RecentActivity />
+          </div>
+        )}
+
+        {isAdmin && (
+          <div className="space-y-3">
+            <div>
+              <h2 className="text-lg font-semibold">Sales team locations</h2>
+              <p className="text-sm text-muted-foreground">Live map of salesperson positions</p>
+            </div>
+            <SalesMap />
+          </div>
+        )}
+
+        {!isAdmin && user && <LocationTracker />}
       </div>
     </DashboardLayout>
   );

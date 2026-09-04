@@ -61,6 +61,7 @@ export const InvoiceTable = ({ invoices, onEdit, isAdmin, onRefetch, profiles }:
   const [deleteDialogOpen, setDeleteDialogOpen] = useState(false);
   const [distributeDialogOpen, setDistributeDialogOpen] = useState(false);
   const [selectedShopInvoices, setSelectedShopInvoices] = useState<any[]>([]);
+  const [selectedShopId, setSelectedShopId] = useState("");
   const [selectedShopName, setSelectedShopName] = useState("");
   const [selectedShopPending, setSelectedShopPending] = useState(0);
   const [paymentStatus, setPaymentStatus] = useState("");
@@ -354,7 +355,13 @@ export const InvoiceTable = ({ invoices, onEdit, isAdmin, onRefetch, profiles }:
     return acc;
   }, {} as Record<string, { shopName: string; shopLocation: string; invoices: any[] }>);
 
-  const handleDistributePayment = (shopName: string, invoices: any[], totalPending: number) => {
+  const handleDistributePayment = (
+    shopId: string,
+    shopName: string,
+    invoices: any[],
+    totalPending: number
+  ) => {
+    setSelectedShopId(shopId);
     setSelectedShopName(shopName);
     setSelectedShopInvoices(invoices);
     setSelectedShopPending(totalPending);
@@ -398,7 +405,9 @@ export const InvoiceTable = ({ invoices, onEdit, isAdmin, onRefetch, profiles }:
                 setSelectedInvoice(invoice);
                 setDeleteDialogOpen(true);
               }}
-              onDistributePayment={handleDistributePayment}
+              onDistributePayment={(shopName, invs, totalPending) =>
+                handleDistributePayment(shopId, shopName, invs, totalPending)
+              }
               isAdmin={isAdmin}
               profiles={profiles}
               onRefetch={onRefetch}
@@ -764,6 +773,7 @@ export const InvoiceTable = ({ invoices, onEdit, isAdmin, onRefetch, profiles }:
       <DistributePaymentDialog
         open={distributeDialogOpen}
         onOpenChange={setDistributeDialogOpen}
+        shopId={selectedShopId}
         shopName={selectedShopName}
         invoices={selectedShopInvoices}
         totalPending={selectedShopPending}

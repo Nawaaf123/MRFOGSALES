@@ -1,53 +1,38 @@
 import { useQuery } from "@tanstack/react-query";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { supabase } from "@/integrations/supabase/client";
+import { api } from "@/lib/api";
+import { useAuth } from "@/lib/auth";
 import { AlertCircle } from "lucide-react";
 import { Badge } from "@/components/ui/badge";
 
-interface PendingPaymentsProps {
-  userId?: string;
-  isAdmin?: boolean;
-}
+type PendingInvoice = {
+  id: string;
+  invoice_number: string;
+  total_amount: number;
+  amount_paid: number;
+  payment_status: "paid" | "partial" | "unpaid";
+  shop: { id: string; name: string } | null;
+};
 
-export const PendingPayments = ({ userId, isAdmin }: PendingPaymentsProps) => {
+export const PendingPayments = () => {
+  const { user } = useAuth();
+  const isAdmin = user?.role === "admin";
+
   const { data: pendingInvoices, isLoading } = useQuery({
-    queryKey: ["pending-payments", userId, isAdmin],
-    queryFn: async () => {
-      let query = supabase
-        .from("invoices")
-        .select(`
-          id,
-          invoice_number,
-          total_amount,
-          payment_status,
-          created_at,
-          shops!inner (name, is_frozen)
-        `)
-        .eq("shops.is_frozen", false)
-        .in("payment_status", ["unpaid", "partial"])
-        .order("created_at", { ascending: false })
-        .limit(8);
-      
-      // Filter by user if not admin
-      if (!isAdmin && userId) {
-        query = query.eq("created_by", userId);
-      }
-
-      const { data, error } = await query;
-      if (error) throw error;
-      return data;
-    },
-    enabled: !!userId,
+    queryKey: ["pending-payments"],
+    queryFn: () => api<PendingInvoice[]>("/dashboard/pending-payments"),
+    enabled: !!user?.id,
   });
 
   const getStatusColor = (status: string) => {
     return status === "unpaid" ? "destructive" : "secondary";
   };
 
-  const totalPending = pendingInvoices?.reduce(
-    (sum, inv) => sum + Number(inv.total_amount),
-    0
-  ) || 0;
+  const totalPending =
+    pendingInvoices?.reduce((sum, inv) => {
+      const remaining = Math.max(0, Number(inv.total_amount) - Number(inv.amount_paid || 0));
+      return sum + remaining;
+    }, 0) || 0;
 
   return (
     <Card>
@@ -67,29 +52,38 @@ export const PendingPayments = ({ userId, isAdmin }: PendingPaymentsProps) => {
           <p className="text-sm text-muted-foreground">Loading...</p>
         ) : pendingInvoices && pendingInvoices.length > 0 ? (
           <div className="space-y-3">
-            {pendingInvoices.map((invoice) => (
-              <div
-                key={invoice.id}
-                className="flex items-center justify-between p-3 border rounded-lg hover:bg-muted/50 transition-colors"
-              >
-                <div className="flex-1">
-                  <div className="flex items-center gap-2 mb-1">
-                    <p className="font-medium text-sm">{invoice.invoice_number}</p>
-                    <Badge variant={getStatusColor(invoice.payment_status)} className="text-xs">
-                      {invoice.payment_status}
-                    </Badge>
+            {pendingInvoices.map((invoice) => {
+              const remaining = Math.max(
+                0,
+                Number(invoice.total_amount) - Number(invoice.amount_paid || 0)
+              );
+              return (
+                <div
+                  key={invoice.id}
+                  className="flex items-center justify-between p-3 border rounded-lg hover:bg-muted/50 transition-colors"
+                >
+                  <div className="flex-1">
+                    <div className="flex items-center gap-2 mb-1">
+                      <p className="font-medium text-sm">{invoice.invoice_number}</p>
+                      <Badge
+                        variant={getStatusColor(invoice.payment_status)}
+                        className="text-xs capitalize"
+                      >
+                        {invoice.payment_status}
+                      </Badge>
+                    </div>
+                    <p className="text-xs text-muted-foreground">
+                      {invoice.shop?.name || "Unknown Shop"}
+                    </p>
                   </div>
-                  <p className="text-xs text-muted-foreground">
-                    {invoice.shops?.name || "Unknown Shop"}
-                  </p>
+                  <div className="text-right">
+                    <p className="font-semibold text-sm text-orange-600">
+                      ${remaining.toFixed(2)}
+                    </p>
+                  </div>
                 </div>
-                <div className="text-right">
-                  <p className="font-semibold text-sm text-orange-600">
-                    ${Number(invoice.total_amount).toFixed(2)}
-                  </p>
-                </div>
-              </div>
-            ))}
+              );
+            })}
           </div>
         ) : (
           <div className="text-center py-6 text-muted-foreground">
