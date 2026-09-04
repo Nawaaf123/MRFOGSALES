@@ -2,7 +2,15 @@ import { useQuery } from "@tanstack/react-query";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
-import { Package, ShoppingBag, FileText, DollarSign, Percent } from "lucide-react";
+import {
+  Package,
+  ShoppingBag,
+  FileText,
+  DollarSign,
+  Percent,
+  ClipboardList,
+  AlertCircle,
+} from "lucide-react";
 import { StatsCard } from "@/components/dashboard/StatsCard";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 
@@ -12,6 +20,8 @@ type DashboardStats = {
   invoices_count: number;
   total_revenue: number;
   collection_rate: number;
+  pending_orders?: number;
+  unpaid_invoices?: number;
 };
 
 const Dashboard = () => {
@@ -43,21 +53,41 @@ const Dashboard = () => {
             title="Products"
             value={isLoading ? "..." : String(stats?.products_count ?? 0)}
             icon={Package}
+            href="/products"
           />
           <StatsCard
             title="Shops"
             value={isLoading ? "..." : String(stats?.shops_count ?? 0)}
             icon={ShoppingBag}
+            href="/shops"
           />
           <StatsCard
             title="Invoices"
             value={isLoading ? "..." : String(stats?.invoices_count ?? 0)}
             icon={FileText}
+            href="/invoices"
           />
           <StatsCard
             title="Revenue"
             value={isLoading ? "..." : `$${(stats?.total_revenue ?? 0).toFixed(2)}`}
             icon={DollarSign}
+          />
+        </div>
+
+        <div className="grid gap-4 md:grid-cols-2">
+          <StatsCard
+            title="Pending Orders"
+            value={isLoading ? "..." : String(stats?.pending_orders ?? 0)}
+            icon={ClipboardList}
+            href="/orders"
+            description="Awaiting admin review"
+          />
+          <StatsCard
+            title="Unpaid Invoices"
+            value={isLoading ? "..." : String(stats?.unpaid_invoices ?? 0)}
+            icon={AlertCircle}
+            href="/invoices"
+            description="Unpaid or partially paid"
           />
         </div>
 

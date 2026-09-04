@@ -4,7 +4,7 @@ from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user
 from app.db.session import get_db
-from app.models import AppRole, Invoice, PaymentStatus, Product, Shop, User
+from app.models import AppRole, Invoice, Order, OrderStatus, PaymentStatus, Product, Shop, User
 from app.schemas import DashboardStats
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
@@ -29,6 +29,12 @@ def dashboard_stats(
         invoices_query = invoices_query.filter(Invoice.created_by == current_user.id)
 
     invoices_count = invoices_query.with_entities(func.count(Invoice.id)).scalar() or 0
+    unpaid_invoices = (
+        invoices_query.filter(Invoice.payment_status != PaymentStatus.paid)
+        .with_entities(func.count(Invoice.id))
+        .scalar()
+        or 0
+    )
 
     totals = invoices_query.with_entities(
         func.coalesce(func.sum(Invoice.total_amount), 0),
@@ -44,10 +50,17 @@ def dashboard_stats(
     paid_amount = float(totals[1] or 0)
     collection_rate = (paid_amount / total_revenue * 100) if total_revenue > 0 else 0.0
 
+    orders_query = db.query(Order).filter(Order.status == OrderStatus.pending)
+    if role != AppRole.admin:
+        orders_query = orders_query.filter(Order.created_by == current_user.id)
+    pending_orders = orders_query.with_entities(func.count(Order.id)).scalar() or 0
+
     return DashboardStats(
         products_count=products_count,
         shops_count=shops_count,
         invoices_count=invoices_count,
         total_revenue=total_revenue,
         collection_rate=collection_rate,
+        pending_orders=pending_orders,
+        unpaid_invoices=unpaid_invoices,
     )

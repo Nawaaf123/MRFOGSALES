@@ -3,12 +3,12 @@ from uuid import UUID
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session, joinedload
 
-from app.api.deps import get_current_user, require_roles
+from app.api.deps import require_roles
+from app.api.routes.auth import serialize_user
 from app.core.security import hash_password
 from app.db.session import get_db
-from app.models import AppRole, User, UserRole, WarehouseCode
-from app.schemas import SignUpRequest, UserPublic
-from app.api.routes.auth import serialize_user
+from app.models import AppRole, User, UserRole
+from app.schemas import SignUpRequest, UserPublic, UserUpdate
 
 router = APIRouter(prefix="/users", tags=["users"])
 
@@ -36,7 +36,7 @@ def create_user(
         email=payload.email.lower(),
         hashed_password=hash_password(payload.password),
         full_name=payload.full_name,
-        assigned_warehouse=WarehouseCode.A,
+        assigned_warehouse=payload.assigned_warehouse,
     )
     db.add(user)
     db.flush()
@@ -46,20 +46,44 @@ def create_user(
     return serialize_user(user)
 
 
-@router.patch("/{user_id}/role", response_model=UserPublic)
-def update_user_role(
+@router.patch("/{user_id}", response_model=UserPublic)
+def update_user(
     user_id: UUID,
-    role: AppRole,
+    payload: UserUpdate,
     db: Session = Depends(get_db),
     _: User = Depends(require_roles(AppRole.admin)),
 ) -> UserPublic:
     user = db.query(User).options(joinedload(User.role)).filter(User.id == user_id).first()
     if not user:
         raise HTTPException(status_code=404, detail="User not found")
-    if not user.role:
-        db.add(UserRole(user_id=user.id, role=role))
-    else:
-        user.role.role = role
+
+    if payload.full_name is not None:
+        user.full_name = payload.full_name
+    if payload.assigned_warehouse is not None:
+        user.assigned_warehouse = payload.assigned_warehouse
+    if payload.is_active is not None:
+        user.is_active = payload.is_active
+    if payload.role is not None:
+        if not user.role:
+            db.add(UserRole(user_id=user.id, role=payload.role))
+        else:
+            user.role.role = payload.role
+
     db.commit()
     user = db.query(User).options(joinedload(User.role)).filter(User.id == user_id).one()
     return serialize_user(user)
+
+
+@router.delete("/{user_id}", status_code=status.HTTP_204_NO_CONTENT)
+def deactivate_user(
+    user_id: UUID,
+    db: Session = Depends(get_db),
+    current_admin: User = Depends(require_roles(AppRole.admin)),
+) -> None:
+    if current_admin.id == user_id:
+        raise HTTPException(status_code=400, detail="Cannot deactivate yourself")
+    user = db.query(User).filter(User.id == user_id).first()
+    if not user:
+        raise HTTPException(status_code=404, detail="User not found")
+    user.is_active = False
+    db.commit()

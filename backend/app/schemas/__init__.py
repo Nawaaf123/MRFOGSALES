@@ -42,11 +42,19 @@ class SignUpRequest(BaseModel):
     password: str = Field(min_length=6)
     full_name: str = Field(min_length=1)
     role: AppRole = AppRole.sales
+    assigned_warehouse: WarehouseCode = WarehouseCode.A
 
 
 class SignInRequest(BaseModel):
     email: EmailStr
     password: str
+
+
+class UserUpdate(BaseModel):
+    role: AppRole | None = None
+    assigned_warehouse: WarehouseCode | None = None
+    full_name: str | None = None
+    is_active: bool | None = None
 
 
 class ProductCreate(BaseModel):
@@ -134,6 +142,18 @@ class ShopOut(ORMModel):
     updated_at: datetime
 
 
+class ShopBrief(ORMModel):
+    id: UUID
+    name: str
+    owner_name: str | None = None
+    phone: str | None = None
+    email: str | None = None
+    street_address: str | None = None
+    city: str | None = None
+    state: str | None = None
+    zip_code: str | None = None
+
+
 class InvoiceItemIn(BaseModel):
     product_id: UUID
     product_name: str
@@ -142,12 +162,42 @@ class InvoiceItemIn(BaseModel):
     subtotal: float
 
 
+class PaymentIn(BaseModel):
+    amount: float = Field(gt=0)
+    payment_method: PaymentMethod
+    payment_date: date | None = None
+    check_number: str | None = None
+    notes: str | None = None
+
+
 class InvoiceCreate(BaseModel):
     shop_id: UUID
     items: list[InvoiceItemIn]
     discount_amount: float = 0
     notes: str | None = None
     warehouse: WarehouseCode | None = WarehouseCode.A
+    payments: list[PaymentIn] = []
+
+
+class InvoiceItemOut(ORMModel):
+    id: UUID
+    product_id: UUID
+    product_name: str
+    quantity: int
+    unit_price: float
+    subtotal: float
+
+
+class PaymentOut(ORMModel):
+    id: UUID
+    invoice_id: UUID
+    amount: float
+    payment_method: PaymentMethod
+    payment_date: date
+    check_number: str | None
+    notes: str | None
+    created_by: UUID
+    created_at: datetime
 
 
 class InvoiceOut(ORMModel):
@@ -162,16 +212,10 @@ class InvoiceOut(ORMModel):
     warehouse: WarehouseCode | None
     created_at: datetime
     updated_at: datetime
-    items: list["InvoiceItemOut"] = []
-
-
-class InvoiceItemOut(ORMModel):
-    id: UUID
-    product_id: UUID
-    product_name: str
-    quantity: int
-    unit_price: float
-    subtotal: float
+    items: list[InvoiceItemOut] = []
+    payments: list[PaymentOut] = []
+    shop: ShopBrief | None = None
+    amount_paid: float = 0
 
 
 class PaymentCreate(BaseModel):
@@ -181,18 +225,6 @@ class PaymentCreate(BaseModel):
     payment_date: date
     check_number: str | None = None
     notes: str | None = None
-
-
-class PaymentOut(ORMModel):
-    id: UUID
-    invoice_id: UUID
-    amount: float
-    payment_method: PaymentMethod
-    payment_date: date
-    check_number: str | None
-    notes: str | None
-    created_by: UUID
-    created_at: datetime
 
 
 class OrderItemIn(BaseModel):
@@ -210,6 +242,15 @@ class OrderCreate(BaseModel):
     warehouse: WarehouseCode | None = WarehouseCode.A
 
 
+class OrderItemOut(ORMModel):
+    id: UUID
+    product_id: UUID
+    product_name: str
+    quantity: int
+    unit_price: float
+    subtotal: float
+
+
 class OrderOut(ORMModel):
     id: UUID
     shop_id: UUID
@@ -222,6 +263,19 @@ class OrderOut(ORMModel):
     warehouse: WarehouseCode | None
     created_at: datetime
     updated_at: datetime
+    items: list[OrderItemOut] = []
+    shop: ShopBrief | None = None
+
+
+class OrderStatusUpdate(BaseModel):
+    status: OrderStatus
+    admin_notes: str | None = None
+    warehouse: WarehouseCode | None = None
+
+
+class OrderApproveResponse(BaseModel):
+    order: OrderOut
+    invoice: InvoiceOut
 
 
 class DashboardStats(BaseModel):
@@ -230,6 +284,8 @@ class DashboardStats(BaseModel):
     invoices_count: int
     total_revenue: float
     collection_rate: float
+    pending_orders: int = 0
+    unpaid_invoices: int = 0
 
 
 class LocationUpdate(BaseModel):
@@ -245,6 +301,3 @@ class LocationOut(ORMModel):
     longitude: float
     accuracy: float | None
     updated_at: datetime
-
-
-InvoiceOut.model_rebuild()
