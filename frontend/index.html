@@ -1,0 +1,69 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <link rel="icon" href="/mr-fog-logo.jpg" type="image/jpeg" />
+    <link rel="manifest" href="/manifest.json" />
+    <link rel="apple-touch-icon" href="/pwa-icon-512.png" />
+    <meta name="theme-color" content="#D95D4E" />
+    <meta name="apple-mobile-web-app-capable" content="yes" />
+    <meta name="apple-mobile-web-app-status-bar-style" content="default" />
+    <meta name="apple-mobile-web-app-title" content="MR FOG Sales" />
+    <link rel="preconnect" href="https://bmegwflbhtddbcvrjvmr.supabase.co" />
+    <link rel="dns-prefetch" href="https://bmegwflbhtddbcvrjvmr.supabase.co" />
+    <link rel="preconnect" href="https://api.mapbox.com" />
+    <link rel="dns-prefetch" href="https://api.mapbox.com" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MR FOG® Sales Manager</title>
+    <meta name="description" content="MR FOG® Sales Management Application - Manage products, shops, and invoices" />
+    <meta name="author" content="MR FOG®" />
+
+    <meta property="og:title" content="MR FOG® Sales Manager" />
+    <meta property="og:description" content="MR FOG® Sales Management Application" />
+    <meta property="og:type" content="website" />
+    <meta property="og:image" content="/mr-fog-logo.jpg" />
+
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:site" content="@MRFOG" />
+    <meta name="twitter:image" content="/mr-fog-logo.jpg" />
+
+    <!-- Critical CSS for initial render -->
+    <style>
+      :root {
+        --background: 0 0% 100%;
+        --foreground: 240 10% 3.9%;
+        --muted-foreground: 240 3.8% 46.1%;
+        --card: 0 0% 100%;
+        --card-foreground: 240 10% 3.9%;
+        --primary: 12 76% 61%;
+      }
+      body {
+        margin: 0;
+        font-family: system-ui, -apple-system, sans-serif;
+        background: hsl(var(--background));
+        color: hsl(var(--foreground));
+      }
+      #root:empty::before {
+        content: '';
+        display: flex;
+        min-height: 100vh;
+        align-items: center;
+        justify-content: center;
+      }
+      #root:empty::after {
+        content: 'Loading MR FOG® Sales Manager...';
+        position: fixed;
+        top: 50%;
+        left: 50%;
+        transform: translate(-50%, -50%);
+        font-size: 1rem;
+        color: hsl(var(--muted-foreground));
+      }
+    </style>
+  </head>
+
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
