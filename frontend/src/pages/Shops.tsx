@@ -1,6 +1,5 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { DashboardLayout } from "@/components/DashboardLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -113,8 +112,9 @@ const Shops = () => {
   const [form, setForm] = useState<ShopFormState>(emptyForm);
 
   const { data: shops = [], isLoading } = useQuery({
-    queryKey: ["shops"],
+    queryKey: ["shops", "include_frozen"],
     queryFn: () => api<Shop[]>("/shops?include_frozen=true"),
+    staleTime: 2 * 60_000,
   });
 
   const filtered = useMemo(() => {
@@ -227,7 +227,7 @@ const Shops = () => {
   };
 
   return (
-    <DashboardLayout>
+    <>
       <div className="space-y-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
@@ -560,7 +560,7 @@ const Shops = () => {
           </div>
         </DialogContent>
       </Dialog>
-    </DashboardLayout>
+    </>
   );
 };
 

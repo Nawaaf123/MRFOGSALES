@@ -1,6 +1,5 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { DashboardLayout } from "@/components/DashboardLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -121,8 +120,8 @@ type Invoice = {
   notes: string | null;
   warehouse: "A" | "B" | null;
   created_at: string;
-  items: InvoiceItem[];
-  payments: InvoicePayment[];
+  items?: InvoiceItem[];
+  payments?: InvoicePayment[];
   shop: InvoiceShop | null;
   amount_paid: number;
 };
@@ -188,8 +187,14 @@ const Invoices = () => {
   const isAdmin = user?.role === "admin";
 
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [shopFilter, setShopFilter] = useState("all");
+
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedSearch(search.trim()), 300);
+    return () => window.clearTimeout(timer);
+  }, [search]);
 
   const [createOpen, setCreateOpen] = useState(false);
   const [shopId, setShopId] = useState("");
@@ -226,12 +231,12 @@ const Invoices = () => {
 
   const invoiceQueryParams = useMemo(() => {
     const params = new URLSearchParams();
-    if (search.trim()) params.set("search", search.trim());
+    if (debouncedSearch) params.set("search", debouncedSearch);
     if (statusFilter !== "all") params.set("payment_status", statusFilter);
     if (shopFilter !== "all") params.set("shop_id", shopFilter);
     const qs = params.toString();
     return qs ? `?${qs}` : "";
-  }, [search, statusFilter, shopFilter]);
+  }, [debouncedSearch, statusFilter, shopFilter]);
 
   const { data: invoices = [], isLoading } = useQuery({
     queryKey: ["invoices", invoiceQueryParams],
@@ -244,8 +249,9 @@ const Invoices = () => {
   });
 
   const { data: products = [], isLoading: productsLoading } = useQuery({
-    queryKey: ["products", "active"],
-    queryFn: () => api<Product[]>("/products?active_only=true"),
+    queryKey: ["products", "active", "brief"],
+    queryFn: () => api<Product[]>("/products?active_only=true&brief=true"),
+    enabled: createOpen,
   });
 
   const createCategories = useMemo(() => {
@@ -264,7 +270,11 @@ const Invoices = () => {
     ).sort((a, b) => a.localeCompare(b));
   }, [products, createCategoryFilter]);
 
+  const canShowProductList =
+    createCategoryFilter !== "all" || productSearch.trim().length >= 2;
+
   const filteredCreateProducts = useMemo(() => {
+    if (!canShowProductList) return [];
     const q = productSearch.trim().toLowerCase();
     const rows = products.filter((p) => {
       if (createCategoryFilter !== "all" && p.category !== createCategoryFilter) return false;
@@ -291,7 +301,13 @@ const Invoices = () => {
       const cmp = sa.localeCompare(sb, undefined, { numeric: true, sensitivity: "base" });
       return cmp !== 0 ? cmp : a.name.localeCompare(b.name);
     });
-  }, [products, productSearch, createCategoryFilter, createSubcategoryFilter]);
+  }, [
+    products,
+    productSearch,
+    createCategoryFilter,
+    createSubcategoryFilter,
+    canShowProductList,
+  ]);
 
   const itemQtyByProduct = useMemo(() => {
     const map = new Map<string, number>();
@@ -603,7 +619,7 @@ const Invoices = () => {
   };
 
   return (
-    <DashboardLayout>
+    <>
       <div className="space-y-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
@@ -690,25 +706,35 @@ const Invoices = () => {
                   amount_paid: inv.amount_paid,
                 }))}
                 onViewInvoice={(inv) => {
-                  const full = invoices.find((i) => i.id === inv.id) || null;
-                  setViewInvoice(full);
+                  void (async () => {
+                    try {
+                      const full = await api<Invoice>(`/invoices/${inv.id}`);
+                      setViewInvoice(full);
+                    } catch (error: unknown) {
+                      const message =
+                        error && typeof error === "object" && "message" in error
+                          ? String((error as ApiError).message)
+                          : "Could not load invoice";
+                      toast({ title: "Error", description: message, variant: "destructive" });
+                    }
+                  })();
                 }}
                 onRecordPayment={(inv) => {
-                  const full = invoices.find((i) => i.id === inv.id);
-                  if (full) openPayment(full);
+                  const row = invoices.find((i) => i.id === inv.id);
+                  if (row) openPayment(row);
                 }}
                 onExportPDF={(inv) => {
-                  const full = invoices.find((i) => i.id === inv.id);
-                  if (full) void exportPdf(full);
+                  const row = invoices.find((i) => i.id === inv.id);
+                  if (row) void exportPdf(row);
                 }}
                 onSendEmail={(inv) => {
-                  const full = invoices.find((i) => i.id === inv.id);
-                  if (full) void emailInvoice(full);
+                  const row = invoices.find((i) => i.id === inv.id);
+                  if (row) void emailInvoice(row);
                 }}
                 sendingEmailId={emailingId}
                 onDeleteInvoice={(inv) => {
-                  const full = invoices.find((i) => i.id === inv.id) || null;
-                  setDeleteInvoice(full);
+                  const row = invoices.find((i) => i.id === inv.id) || null;
+                  setDeleteInvoice(row);
                 }}
                 onDistributePayment={(shopId, shopName, pendingInvs, totalPending) => {
                   const fullInvoices = pendingInvs
@@ -923,7 +949,11 @@ const Invoices = () => {
               </div>
 
               <div className="max-h-56 overflow-y-auto overflow-x-hidden rounded-md border divide-y overscroll-contain min-w-0">
-                {productsLoading ? (
+                {!canShowProductList ? (
+                  <p className="p-3 text-sm text-muted-foreground text-center">
+                    Pick a category or type at least 2 characters to list products
+                  </p>
+                ) : productsLoading ? (
                   <p className="p-3 text-sm text-muted-foreground text-center">Loading products...</p>
                 ) : filteredCreateProducts.length === 0 ? (
                   <p className="p-3 text-sm text-muted-foreground text-center">No products match</p>
@@ -1277,7 +1307,7 @@ const Invoices = () => {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {viewInvoice.items.map((item, idx) => (
+                      {(viewInvoice.items || []).map((item, idx) => (
                         <TableRow key={item.id || `${item.product_id}-${idx}`}>
                           <TableCell>{item.product_name}</TableCell>
                           <TableCell>{item.quantity}</TableCell>
@@ -1294,7 +1324,7 @@ const Invoices = () => {
                 <div>
                   <p className="font-medium mb-2">Payments</p>
                   <div className="space-y-1">
-                    {viewInvoice.payments.map((p) => (
+                    {(viewInvoice.payments || []).map((p) => (
                       <div key={p.id} className="flex justify-between text-muted-foreground">
                         <span>
                           {p.payment_method} · {p.payment_date}
@@ -1377,7 +1407,7 @@ const Invoices = () => {
           onRefetch={refetchInvoices}
         />
       )}
-    </DashboardLayout>
+    </>
   );
 };
 

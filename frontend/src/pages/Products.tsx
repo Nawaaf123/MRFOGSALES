@@ -1,6 +1,5 @@
 import { useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { DashboardLayout } from "@/components/DashboardLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -137,6 +136,7 @@ const Products = () => {
   const { data: products = [], isLoading } = useQuery({
     queryKey: ["products"],
     queryFn: () => api<Product[]>("/products"),
+    staleTime: 2 * 60_000,
   });
 
   const categories = useMemo(() => {
@@ -155,7 +155,10 @@ const Products = () => {
     ).sort((a, b) => a.localeCompare(b));
   }, [products, categoryFilter]);
 
+  const canShowProductList = categoryFilter !== "all" || search.trim().length >= 2;
+
   const filtered = useMemo(() => {
+    if (!canShowProductList) return [];
     const q = search.trim().toLowerCase();
     const rows = products.filter((p) => {
       if (categoryFilter !== "all" && p.category !== categoryFilter) return false;
@@ -181,7 +184,7 @@ const Products = () => {
       if (cmp !== 0) return cmp * dir;
       return a.name.localeCompare(b.name) * dir;
     });
-  }, [products, search, categoryFilter, subcategoryFilter, skuSortAsc]);
+  }, [products, search, categoryFilter, subcategoryFilter, skuSortAsc, canShowProductList]);
 
   const saveMutation = useMutation({
     mutationFn: () => {
@@ -264,7 +267,7 @@ const Products = () => {
   };
 
   return (
-    <DashboardLayout>
+    <>
       <div className="space-y-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
@@ -426,10 +429,19 @@ const Products = () => {
         </div>
 
         <p className="text-xs text-muted-foreground">
-          Showing {filtered.length} product{filtered.length === 1 ? "" : "s"}, sorted by SKU{" "}
-          {skuSortAsc ? "ascending" : "descending"}
+          {canShowProductList
+            ? `Showing ${filtered.length} product${filtered.length === 1 ? "" : "s"}, sorted by SKU ${
+                skuSortAsc ? "ascending" : "descending"
+              }`
+            : "Pick a category or type at least 2 characters to list products"}
         </p>
 
+        {!canShowProductList ? (
+          <div className="rounded-md border border-dashed p-8 text-center text-sm text-muted-foreground">
+            Choose a category or search by SKU/flavor to browse the catalog faster
+          </div>
+        ) : (
+        <>
         {/* Mobile cards */}
         <div className="md:hidden space-y-3">
           {isLoading ? (
@@ -618,6 +630,8 @@ const Products = () => {
             </TableBody>
           </Table>
         </div>
+        </>
+        )}
       </div>
 
       <Dialog
@@ -758,7 +772,7 @@ const Products = () => {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
-    </DashboardLayout>
+    </>
   );
 };
 

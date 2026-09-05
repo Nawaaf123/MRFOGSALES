@@ -5,7 +5,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user
 from app.db.session import get_db
 from app.models import AppRole, Invoice, Order, OrderStatus, PaymentStatus, Product, Shop, User
-from app.schemas import DashboardStats, InvoiceOut, LowStockProduct
+from app.schemas import DashboardStats, InvoiceListOut, InvoiceOut, LowStockProduct
 from app.api.routes.invoices import serialize_invoice
 
 router = APIRouter(prefix="/dashboard", tags=["dashboard"])
@@ -99,6 +99,7 @@ def recent_invoices(
 ) -> list[InvoiceOut]:
     from sqlalchemy.orm import joinedload
 
+    role = current_user.role.role if current_user.role else AppRole.sales
     query = (
         db.query(Invoice)
         .options(
@@ -108,38 +109,33 @@ def recent_invoices(
         )
         .join(Shop, Invoice.shop_id == Shop.id)
         .filter(Shop.is_frozen.is_(False))
-        .order_by(Invoice.created_at.desc())
-        .limit(5)
     )
-    role = current_user.role.role if current_user.role else AppRole.sales
     if role != AppRole.admin:
         query = query.filter(Invoice.created_by == current_user.id)
+    query = query.order_by(Invoice.created_at.desc()).limit(5)
     return [serialize_invoice(inv, db) for inv in query.all()]
 
 
-@router.get("/pending-payments", response_model=list[InvoiceOut])
+@router.get("/pending-payments", response_model=list[InvoiceListOut])
 def pending_payments(
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
-) -> list[InvoiceOut]:
+) -> list[InvoiceListOut]:
     from sqlalchemy.orm import joinedload
+    from app.api.routes.invoices import paid_amounts_for_invoices, serialize_invoice_list_row
 
+    role = current_user.role.role if current_user.role else AppRole.sales
     query = (
         db.query(Invoice)
-        .options(
-            joinedload(Invoice.items),
-            joinedload(Invoice.payments),
-            joinedload(Invoice.shop),
-        )
+        .options(joinedload(Invoice.shop))
         .join(Shop, Invoice.shop_id == Shop.id)
         .filter(
             Shop.is_frozen.is_(False),
             Invoice.payment_status.in_([PaymentStatus.unpaid, PaymentStatus.partial]),
         )
-        .order_by(Invoice.created_at.desc())
-        .limit(8)
     )
-    role = current_user.role.role if current_user.role else AppRole.sales
     if role != AppRole.admin:
         query = query.filter(Invoice.created_by == current_user.id)
-    return [serialize_invoice(inv, db) for inv in query.all()]
+    invoices = query.order_by(Invoice.created_at.desc()).limit(8).all()
+    paid_map = paid_amounts_for_invoices(db, [inv.id for inv in invoices])
+    return [serialize_invoice_list_row(inv, paid_map.get(inv.id, 0.0)) for inv in invoices]

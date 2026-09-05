@@ -1,6 +1,5 @@
 import { lazy, Suspense, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
-import { DashboardLayout } from "@/components/DashboardLayout";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
 import {
@@ -20,7 +19,6 @@ import { TopShops } from "@/components/dashboard/TopShops";
 import { RecentActivity } from "@/components/dashboard/RecentActivity";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
-import { LocationTracker } from "@/components/location/LocationTracker";
 
 const LocationsMap = lazy(() =>
   import("@/components/location/SalesMap").then((m) => ({ default: m.LocationsMap }))
@@ -50,7 +48,7 @@ const Dashboard = () => {
   });
 
   return (
-    <DashboardLayout>
+    <>
       <div className="space-y-6">
         <div>
           <h1 className="text-2xl md:text-3xl font-bold tracking-tight">
@@ -184,9 +182,9 @@ const Dashboard = () => {
           </div>
         )}
 
-        {!isAdmin && user && <LocationTracker />}
+        
       </div>
-    </DashboardLayout>
+    </>
   );
 };
 

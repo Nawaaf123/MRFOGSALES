@@ -9,7 +9,6 @@ import {
   startOfMonth,
   startOfWeek,
 } from "date-fns";
-import { DashboardLayout } from "@/components/DashboardLayout";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
@@ -116,7 +115,7 @@ const SalesPerformance = () => {
   );
 
   return (
-    <DashboardLayout>
+    <>
       <div className="space-y-6">
         <div>
           <h1 className="text-2xl font-bold">Sales Performance</h1>
@@ -252,7 +251,7 @@ const SalesPerformance = () => {
           </CardContent>
         </Card>
       </div>
-    </DashboardLayout>
+    </>
   );
 };
 

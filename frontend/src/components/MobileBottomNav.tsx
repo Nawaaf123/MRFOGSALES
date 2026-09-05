@@ -1,17 +1,52 @@
 import { useNavigate, useLocation } from "react-router-dom";
+import { useQueryClient } from "@tanstack/react-query";
 import { LayoutDashboard, ShoppingBag, FileText, Package } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { api } from "@/lib/api";
 
 const items = [
-  { icon: LayoutDashboard, label: "Home", path: "/dashboard" },
-  { icon: ShoppingBag, label: "Shops", path: "/shops" },
-  { icon: FileText, label: "Invoices", path: "/invoices" },
-  { icon: Package, label: "Products", path: "/products" },
+  { icon: LayoutDashboard, label: "Home", path: "/dashboard", prefetch: "dashboard" as const },
+  { icon: ShoppingBag, label: "Shops", path: "/shops", prefetch: "shops" as const },
+  { icon: FileText, label: "Invoices", path: "/invoices", prefetch: "invoices" as const },
+  { icon: Package, label: "Products", path: "/products", prefetch: "products" as const },
 ];
 
 export function MobileBottomNav() {
   const navigate = useNavigate();
   const location = useLocation();
+  const queryClient = useQueryClient();
+
+  const prefetch = (kind: (typeof items)[number]["prefetch"]) => {
+    if (kind === "dashboard") {
+      void queryClient.prefetchQuery({
+        queryKey: ["dashboard-stats"],
+        queryFn: () => api("/dashboard/stats"),
+      });
+      void queryClient.prefetchQuery({
+        queryKey: ["pending-payments"],
+        queryFn: () => api("/dashboard/pending-payments"),
+      });
+    } else if (kind === "shops") {
+      void queryClient.prefetchQuery({
+        queryKey: ["shops", "include_frozen"],
+        queryFn: () => api("/shops?include_frozen=true"),
+      });
+    } else if (kind === "invoices") {
+      void queryClient.prefetchQuery({
+        queryKey: ["invoices", ""],
+        queryFn: () => api("/invoices"),
+      });
+      void queryClient.prefetchQuery({
+        queryKey: ["shops"],
+        queryFn: () => api("/shops"),
+      });
+    } else if (kind === "products") {
+      void queryClient.prefetchQuery({
+        queryKey: ["products"],
+        queryFn: () => api("/products"),
+      });
+    }
+  };
 
   return (
     <nav
@@ -25,6 +60,7 @@ export function MobileBottomNav() {
             <button
               key={item.path}
               type="button"
+              onPointerDown={() => prefetch(item.prefetch)}
               onClick={() => navigate(item.path)}
               className={cn(
                 "flex flex-col items-center justify-center gap-0.5 text-[10px] font-medium transition-colors touch-manipulation",

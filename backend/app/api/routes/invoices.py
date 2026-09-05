@@ -24,6 +24,7 @@ from app.schemas import (
     DistributePaymentResult,
     InvoiceCreate,
     InvoiceEmailRequest,
+    InvoiceListOut,
     InvoiceOut,
     LegacyBalanceCreate,
     PaymentCreate,
@@ -71,15 +72,15 @@ def refresh_payment_status(db: Session, invoice: Invoice) -> None:
         invoice.payment_status = PaymentStatus.partial
 
 
-def serialize_invoice(invoice: Invoice, db: Session) -> InvoiceOut:
-    paid = (
-        db.query(func.coalesce(func.sum(Payment.amount), 0))
-        .filter(Payment.invoice_id == invoice.id)
-        .scalar()
-    )
-    shop = None
-    if invoice.shop:
-        shop = ShopBrief.model_validate(invoice.shop)
+def serialize_invoice(invoice: Invoice, db: Session, *, amount_paid: float | None = None) -> InvoiceOut:
+    if amount_paid is None:
+        paid = (
+            db.query(func.coalesce(func.sum(Payment.amount), 0))
+            .filter(Payment.invoice_id == invoice.id)
+            .scalar()
+        )
+        amount_paid = float(paid or 0)
+    shop = ShopBrief.model_validate(invoice.shop) if invoice.shop else None
     return InvoiceOut(
         id=invoice.id,
         invoice_number=invoice.invoice_number,
@@ -95,8 +96,39 @@ def serialize_invoice(invoice: Invoice, db: Session) -> InvoiceOut:
         items=invoice.items or [],
         payments=invoice.payments or [],
         shop=shop,
-        amount_paid=float(paid or 0),
+        amount_paid=amount_paid,
     )
+
+
+def serialize_invoice_list_row(invoice: Invoice, amount_paid: float) -> InvoiceListOut:
+    shop = ShopBrief.model_validate(invoice.shop) if invoice.shop else None
+    return InvoiceListOut(
+        id=invoice.id,
+        invoice_number=invoice.invoice_number,
+        shop_id=invoice.shop_id,
+        created_by=invoice.created_by,
+        total_amount=float(invoice.total_amount or 0),
+        discount_amount=float(invoice.discount_amount or 0),
+        payment_status=invoice.payment_status,
+        notes=invoice.notes,
+        warehouse=invoice.warehouse,
+        created_at=invoice.created_at,
+        updated_at=invoice.updated_at,
+        shop=shop,
+        amount_paid=amount_paid,
+    )
+
+
+def paid_amounts_for_invoices(db: Session, invoice_ids: list[UUID]) -> dict[UUID, float]:
+    if not invoice_ids:
+        return {}
+    rows = (
+        db.query(Payment.invoice_id, func.coalesce(func.sum(Payment.amount), 0))
+        .filter(Payment.invoice_id.in_(invoice_ids))
+        .group_by(Payment.invoice_id)
+        .all()
+    )
+    return {invoice_id: float(total or 0) for invoice_id, total in rows}
 
 
 def load_invoice(db: Session, invoice_id: UUID) -> Invoice | None:
@@ -112,7 +144,7 @@ def load_invoice(db: Session, invoice_id: UUID) -> Invoice | None:
     )
 
 
-@router.get("/invoices", response_model=list[InvoiceOut])
+@router.get("/invoices", response_model=list[InvoiceListOut])
 def list_invoices(
     search: str | None = Query(default=None),
     payment_status: PaymentStatus | None = Query(default=None),
@@ -121,14 +153,10 @@ def list_invoices(
     date_to: datetime | None = Query(default=None),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
-) -> list[InvoiceOut]:
+) -> list[InvoiceListOut]:
     query = (
         db.query(Invoice)
-        .options(
-            joinedload(Invoice.items),
-            joinedload(Invoice.payments),
-            joinedload(Invoice.shop),
-        )
+        .options(joinedload(Invoice.shop))
         .join(Shop, Invoice.shop_id == Shop.id)
         .filter(Shop.is_frozen.is_(False))
     )
@@ -157,7 +185,8 @@ def list_invoices(
         )
 
     invoices = query.order_by(Invoice.created_at.desc()).all()
-    return [serialize_invoice(inv, db) for inv in invoices]
+    paid_map = paid_amounts_for_invoices(db, [inv.id for inv in invoices])
+    return [serialize_invoice_list_row(inv, paid_map.get(inv.id, 0.0)) for inv in invoices]
 
 
 @router.post("/invoices", response_model=InvoiceOut, status_code=status.HTTP_201_CREATED)
@@ -192,10 +221,21 @@ def create_invoice(
             db.add(invoice)
             db.flush()
 
+            product_ids = list({item.product_id for item in payload.items})
+            products = (
+                db.query(Product)
+                .filter(Product.id.in_(product_ids))
+                .with_for_update()
+                .all()
+            )
+            product_map = {p.id: p for p in products}
+            missing = [pid for pid in product_ids if pid not in product_map]
+            if missing:
+                raise HTTPException(status_code=404, detail=f"Product not found: {missing[0]}")
+
+            warehouse = payload.warehouse.value if payload.warehouse else "A"
             for item in payload.items:
-                product = db.query(Product).filter(Product.id == item.product_id).with_for_update().first()
-                if not product:
-                    raise HTTPException(status_code=404, detail=f"Product not found: {item.product_id}")
+                product = product_map[item.product_id]
                 db.add(
                     InvoiceItem(
                         invoice_id=invoice.id,
@@ -206,7 +246,6 @@ def create_invoice(
                         subtotal=item.subtotal,
                     )
                 )
-                warehouse = payload.warehouse.value if payload.warehouse else "A"
                 if warehouse == "B":
                     product.stock_quantity_b = max(int(product.stock_quantity_b) - item.quantity, 0)
                 else:

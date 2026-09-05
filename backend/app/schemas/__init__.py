@@ -102,6 +102,15 @@ class ProductOut(ORMModel):
     updated_at: datetime
 
 
+class ProductBrief(ORMModel):
+    id: UUID
+    name: str
+    sku: str | None = None
+    category: str
+    subcategory: str | None = None
+    price: float
+
+
 class ShopCreate(BaseModel):
     name: str
     owner_name: str | None = None
@@ -234,6 +243,24 @@ class InvoiceOut(ORMModel):
     updated_at: datetime
     items: list[InvoiceItemOut] = []
     payments: list[PaymentOut] = []
+    shop: ShopBrief | None = None
+    amount_paid: float = 0
+
+
+class InvoiceListOut(ORMModel):
+    """Lean list row — no nested items/payments (load detail via GET /invoices/{id})."""
+
+    id: UUID
+    invoice_number: str
+    shop_id: UUID
+    created_by: UUID | None
+    total_amount: float
+    discount_amount: float
+    payment_status: PaymentStatus
+    notes: str | None = None
+    warehouse: WarehouseCode | None = None
+    created_at: datetime
+    updated_at: datetime | None = None
     shop: ShopBrief | None = None
     amount_paid: float = 0
 
