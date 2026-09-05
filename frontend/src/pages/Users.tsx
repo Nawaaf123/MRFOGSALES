@@ -174,6 +174,7 @@ const Users = () => {
             <p className="text-muted-foreground">Manage team accounts, roles, and warehouses</p>
           </div>
           <Button
+            className="w-full sm:w-auto h-11"
             onClick={() => {
               setCreateForm(emptyCreate);
               setCreateOpen(true);
@@ -184,7 +185,7 @@ const Users = () => {
           </Button>
         </div>
 
-        <div className="rounded-md border">
+        <div className="rounded-md border overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>

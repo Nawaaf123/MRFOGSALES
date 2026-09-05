@@ -219,9 +219,9 @@ const Products = () => {
             <p className="text-muted-foreground">Manage catalog and warehouse stock</p>
           </div>
           {canManage && (
-            <div className="flex flex-wrap gap-2">
+            <div className="flex flex-col sm:flex-row flex-wrap gap-2 w-full sm:w-auto">
               <BulkProductUploadDialog categoryFilter={categoryFilter} />
-              <Button onClick={openCreate}>
+              <Button className="w-full sm:w-auto h-11" onClick={openCreate}>
                 <Plus className="h-4 w-4 mr-2" />
                 Add Product
               </Button>
@@ -242,7 +242,7 @@ const Products = () => {
           <div className="w-full sm:w-56 space-y-2">
             <Label>Category</Label>
             <Select value={categoryFilter} onValueChange={setCategoryFilter}>
-              <SelectTrigger>
+              <SelectTrigger className="h-11">
                 <SelectValue placeholder="All categories" />
               </SelectTrigger>
               <SelectContent>
@@ -257,7 +257,94 @@ const Products = () => {
           </div>
         </div>
 
-        <div className="rounded-md border">
+        {/* Mobile cards */}
+        <div className="md:hidden space-y-3">
+          {isLoading ? (
+            <p className="text-sm text-muted-foreground py-8 text-center">Loading...</p>
+          ) : filtered.length === 0 ? (
+            <p className="text-sm text-muted-foreground py-8 text-center">No products found</p>
+          ) : (
+            filtered.map((product) => {
+              const lowStock =
+                product.stock_quantity + product.stock_quantity_b <= product.low_stock_threshold;
+              return (
+                <div
+                  key={product.id}
+                  className={`rounded-lg border bg-card p-4 space-y-3 ${!product.is_active ? "opacity-60" : ""}`}
+                >
+                  <div className="flex items-start justify-between gap-2">
+                    <div className="min-w-0">
+                      <p className="font-semibold leading-snug">{product.name}</p>
+                      <p className="text-sm text-muted-foreground">
+                        {product.category}
+                        {product.subcategory ? ` · ${product.subcategory}` : ""}
+                      </p>
+                    </div>
+                    <Badge variant={product.is_active ? "default" : "secondary"} className="shrink-0">
+                      {product.is_active ? "Active" : "Inactive"}
+                    </Badge>
+                  </div>
+                  <div className="grid grid-cols-3 gap-2 text-sm">
+                    <div>
+                      <p className="text-xs text-muted-foreground">Price</p>
+                      <p className="font-semibold">${Number(product.price).toFixed(2)}</p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground">Stock A</p>
+                      <p className={lowStock ? "font-semibold text-destructive" : "font-semibold"}>
+                        {product.stock_quantity}
+                      </p>
+                    </div>
+                    <div>
+                      <p className="text-xs text-muted-foreground">Stock B</p>
+                      <p className="font-semibold">
+                        {product.stock_quantity_b}
+                        {lowStock && (
+                          <Badge variant="destructive" className="ml-1 text-[10px] px-1 py-0">
+                            Low
+                          </Badge>
+                        )}
+                      </p>
+                    </div>
+                  </div>
+                  {canManage && (
+                    <div className="flex gap-2 border-t pt-3">
+                      <Button variant="outline" className="flex-1 h-11" onClick={() => openEdit(product)}>
+                        <Edit className="h-4 w-4 mr-2" />
+                        Edit
+                      </Button>
+                      <Button
+                        variant="outline"
+                        className="flex-1 h-11"
+                        onClick={() =>
+                          toggleActiveMutation.mutate({
+                            id: product.id,
+                            is_active: product.is_active,
+                          })
+                        }
+                      >
+                        {product.is_active ? "Deactivate" : "Activate"}
+                      </Button>
+                      {isAdmin && product.is_active && (
+                        <Button
+                          variant="outline"
+                          className="h-11 px-3"
+                          title="Remove"
+                          onClick={() => setDeactivateId(product.id)}
+                        >
+                          <Power className="h-4 w-4 text-destructive" />
+                        </Button>
+                      )}
+                    </div>
+                  )}
+                </div>
+              );
+            })
+          )}
+        </div>
+
+        {/* Desktop table */}
+        <div className="hidden md:block rounded-md border overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -378,7 +465,7 @@ const Products = () => {
                 placeholder="Product name"
               />
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-2">
                 <Label>Category</Label>
                 <Input
@@ -413,16 +500,18 @@ const Products = () => {
                 type="number"
                 step="0.01"
                 min="0"
+                inputMode="decimal"
                 value={form.price}
                 onChange={(e) => setForm({ ...form, price: e.target.value })}
               />
             </div>
-            <div className="grid grid-cols-3 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
               <div className="space-y-2">
                 <Label>Stock A</Label>
                 <Input
                   type="number"
                   min="0"
+                  inputMode="numeric"
                   value={form.stock_quantity}
                   onChange={(e) => setForm({ ...form, stock_quantity: e.target.value })}
                 />
@@ -432,6 +521,7 @@ const Products = () => {
                 <Input
                   type="number"
                   min="0"
+                  inputMode="numeric"
                   value={form.stock_quantity_b}
                   onChange={(e) => setForm({ ...form, stock_quantity_b: e.target.value })}
                 />
@@ -441,16 +531,18 @@ const Products = () => {
                 <Input
                   type="number"
                   min="0"
+                  inputMode="numeric"
                   value={form.low_stock_threshold}
                   onChange={(e) => setForm({ ...form, low_stock_threshold: e.target.value })}
                 />
               </div>
             </div>
-            <div className="flex justify-end gap-2 pt-2">
-              <Button variant="outline" onClick={() => setOpen(false)}>
+            <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 pt-2">
+              <Button variant="outline" className="w-full sm:w-auto h-11" onClick={() => setOpen(false)}>
                 Cancel
               </Button>
               <Button
+                className="w-full sm:w-auto h-11"
                 disabled={!form.name.trim() || saveMutation.isPending}
                 onClick={() => saveMutation.mutate()}
               >

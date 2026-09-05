@@ -2,7 +2,8 @@ from datetime import date, datetime, timezone
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import case, func, or_
+from sqlalchemy import case, func, or_, text
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.orm import Session, joinedload
 
 from app.api.deps import get_current_user, require_roles
@@ -32,10 +33,26 @@ from app.schemas import (
 
 router = APIRouter(tags=["invoices"])
 
+# Postgres advisory lock key — serializes invoice number allocation across requests
+_INVOICE_NUMBER_LOCK = 872_364_101
+
 
 def next_invoice_number(db: Session) -> str:
-    count = db.query(func.count(Invoice.id)).scalar() or 0
-    return f"INV-{count + 1:06d}"
+    """Allocate the next INV-###### under a transaction-scoped advisory lock.
+
+    Uses MAX(invoice_number) so gaps from failed concurrent inserts or deletes
+    cannot cause UniqueViolation on count+1.
+    """
+    db.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": _INVOICE_NUMBER_LOCK})
+    last = db.query(func.max(Invoice.invoice_number)).scalar()
+    if not last:
+        n = 1
+    else:
+        try:
+            n = int(str(last).rsplit("-", 1)[-1]) + 1
+        except ValueError:
+            n = (db.query(func.count(Invoice.id)).scalar() or 0) + 1
+    return f"INV-{n:06d}"
 
 
 def refresh_payment_status(db: Session, invoice: Invoice) -> None:
@@ -158,58 +175,76 @@ def create_invoice(
     items_total = sum(item.subtotal for item in payload.items)
     total_amount = max(items_total - payload.discount_amount, 0)
 
-    invoice = Invoice(
-        invoice_number=next_invoice_number(db),
-        shop_id=payload.shop_id,
-        created_by=current_user.id,
-        total_amount=total_amount,
-        discount_amount=payload.discount_amount,
-        notes=payload.notes,
-        warehouse=payload.warehouse,
-        payment_status=PaymentStatus.unpaid,
-    )
-    db.add(invoice)
-    db.flush()
-
-    for item in payload.items:
-        product = db.query(Product).filter(Product.id == item.product_id).first()
-        if not product:
-            raise HTTPException(status_code=404, detail=f"Product not found: {item.product_id}")
-        db.add(
-            InvoiceItem(
-                invoice_id=invoice.id,
-                product_id=item.product_id,
-                product_name=item.product_name,
-                quantity=item.quantity,
-                unit_price=item.unit_price,
-                subtotal=item.subtotal,
-            )
-        )
-        warehouse = payload.warehouse.value if payload.warehouse else "A"
-        if warehouse == "B":
-            product.stock_quantity_b = max(int(product.stock_quantity_b) - item.quantity, 0)
-        else:
-            product.stock_quantity = max(int(product.stock_quantity) - item.quantity, 0)
-
-    for payment_in in payload.payments:
-        db.add(
-            Payment(
-                invoice_id=invoice.id,
-                amount=payment_in.amount,
-                payment_method=payment_in.payment_method,
-                payment_date=payment_in.payment_date or date.today(),
-                check_number=payment_in.check_number,
-                notes=payment_in.notes,
+    # Retry a few times if a rare unique-number race still slips through
+    last_error: Exception | None = None
+    for _attempt in range(5):
+        try:
+            invoice = Invoice(
+                invoice_number=next_invoice_number(db),
+                shop_id=payload.shop_id,
                 created_by=current_user.id,
+                total_amount=total_amount,
+                discount_amount=payload.discount_amount,
+                notes=payload.notes,
+                warehouse=payload.warehouse,
+                payment_status=PaymentStatus.unpaid,
             )
-        )
+            db.add(invoice)
+            db.flush()
 
-    db.flush()
-    refresh_payment_status(db, invoice)
-    db.commit()
-    loaded = load_invoice(db, invoice.id)
-    assert loaded is not None
-    return serialize_invoice(loaded, db)
+            for item in payload.items:
+                product = db.query(Product).filter(Product.id == item.product_id).with_for_update().first()
+                if not product:
+                    raise HTTPException(status_code=404, detail=f"Product not found: {item.product_id}")
+                db.add(
+                    InvoiceItem(
+                        invoice_id=invoice.id,
+                        product_id=item.product_id,
+                        product_name=item.product_name,
+                        quantity=item.quantity,
+                        unit_price=item.unit_price,
+                        subtotal=item.subtotal,
+                    )
+                )
+                warehouse = payload.warehouse.value if payload.warehouse else "A"
+                if warehouse == "B":
+                    product.stock_quantity_b = max(int(product.stock_quantity_b) - item.quantity, 0)
+                else:
+                    product.stock_quantity = max(int(product.stock_quantity) - item.quantity, 0)
+
+            for payment_in in payload.payments:
+                db.add(
+                    Payment(
+                        invoice_id=invoice.id,
+                        amount=payment_in.amount,
+                        payment_method=payment_in.payment_method,
+                        payment_date=payment_in.payment_date or date.today(),
+                        check_number=payment_in.check_number,
+                        notes=payment_in.notes,
+                        created_by=current_user.id,
+                    )
+                )
+
+            db.flush()
+            refresh_payment_status(db, invoice)
+            db.commit()
+            loaded = load_invoice(db, invoice.id)
+            assert loaded is not None
+            return serialize_invoice(loaded, db)
+        except IntegrityError as exc:
+            db.rollback()
+            last_error = exc
+            if "invoice_number" not in str(exc).lower() and "ix_invoices_invoice_number" not in str(exc):
+                raise HTTPException(status_code=409, detail="Could not create invoice due to a conflict") from exc
+            continue
+        except HTTPException:
+            db.rollback()
+            raise
+
+    raise HTTPException(
+        status_code=409,
+        detail="Could not allocate a unique invoice number under load",
+    ) from last_error
 
 
 @router.get("/invoices/{invoice_id}", response_model=InvoiceOut)

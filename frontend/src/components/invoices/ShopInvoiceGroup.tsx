@@ -98,33 +98,40 @@ export const ShopInvoiceGroup = ({
   const actionButtons = (invoice: ShopGroupInvoice, outline: boolean) => {
     const variant = outline ? "outline" : "ghost";
     const pending = pendingOf(invoice);
+    const btnClass = outline ? "h-10 min-w-10 flex-1 sm:flex-none" : "h-8 w-8 p-0";
     return (
       <>
-        <Button variant={variant} size="sm" onClick={() => onViewInvoice(invoice)} title="View">
+        <Button variant={variant} size="sm" className={btnClass} onClick={() => onViewInvoice(invoice)} title="View">
           <Eye className="h-4 w-4" />
+          {outline && <span className="ml-1 sm:hidden text-xs">View</span>}
         </Button>
         {canManage && pending > 0.01 && (
           <Button
             variant={variant}
             size="sm"
+            className={btnClass}
             onClick={() => onRecordPayment(invoice)}
             title="Record Payment"
           >
             <DollarSign className="h-4 w-4" />
+            {outline && <span className="ml-1 sm:hidden text-xs">Pay</span>}
           </Button>
         )}
         <Button
           variant={variant}
           size="sm"
+          className={btnClass}
           onClick={() => onExportPDF(invoice)}
           title="Export PDF"
         >
           <Download className="h-4 w-4" />
+          {outline && <span className="ml-1 sm:hidden text-xs">PDF</span>}
         </Button>
         {canManage && (
           <Button
             variant={variant}
             size="sm"
+            className={btnClass}
             onClick={() => onSendEmail(invoice)}
             title="Send Email"
             disabled={sendingEmailId === invoice.id}
@@ -134,17 +141,19 @@ export const ShopInvoiceGroup = ({
             ) : (
               <Mail className="h-4 w-4" />
             )}
+            {outline && <span className="ml-1 sm:hidden text-xs">Email</span>}
           </Button>
         )}
         {isAdmin && (
           <Button
             variant={variant}
             size="sm"
+            className={btnClass}
             onClick={() => onDeleteInvoice(invoice)}
             title="Delete Invoice"
-            className="text-destructive hover:text-destructive"
           >
-            <Trash2 className="h-4 w-4" />
+            <Trash2 className="h-4 w-4 text-destructive" />
+            {outline && <span className="ml-1 sm:hidden text-xs text-destructive">Del</span>}
           </Button>
         )}
       </>
@@ -159,7 +168,7 @@ export const ShopInvoiceGroup = ({
             variant="ghost"
             size="sm"
             onClick={() => setIsExpanded(!isExpanded)}
-            className="h-8 w-8 p-0 flex-shrink-0"
+            className="h-11 w-11 p-0 flex-shrink-0 touch-target"
           >
             {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
           </Button>
@@ -190,12 +199,12 @@ export const ShopInvoiceGroup = ({
                   </p>
                 </div>
                 {canManage && (
-                  <div className="flex gap-2">
+                  <div className="flex w-full sm:w-auto gap-2">
                     <Button
                       onClick={() => setLegacyBalanceDialogOpen(true)}
                       size="sm"
                       variant="outline"
-                      className="w-full sm:w-auto"
+                      className="flex-1 sm:flex-none h-10"
                       title="Add old/legacy balance for this shop"
                     >
                       <Plus className="h-4 w-4 mr-1" />
@@ -208,7 +217,7 @@ export const ShopInvoiceGroup = ({
                           onDistributePayment(shopId, shopName, invoicesWithPending, totalPending)
                         }
                         size="sm"
-                        className="w-full sm:w-auto bg-red-600 hover:bg-red-700 text-white"
+                        className="flex-1 sm:flex-none h-10 bg-red-600 hover:bg-red-700 text-white"
                       >
                         <DollarSign className="h-4 w-4 mr-1" />
                         Pay

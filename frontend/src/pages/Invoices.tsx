@@ -45,7 +45,7 @@ import { generateInvoicePDF, saveInvoicePDF } from "@/lib/pdfGenerator";
 import { CreditDialog } from "@/components/invoices/CreditDialog";
 import { DistributePaymentDialog } from "@/components/invoices/DistributePaymentDialog";
 import { ShopInvoiceGroup } from "@/components/invoices/ShopInvoiceGroup";
-import { Plus } from "lucide-react";
+import { Plus, Trash2 } from "lucide-react";
 
 type Shop = {
   id: string;
@@ -222,10 +222,9 @@ const Invoices = () => {
     queryFn: () => api<Shop[]>("/shops"),
   });
 
-  const { data: products = [] } = useQuery({
+  const { data: products = [], isLoading: productsLoading } = useQuery({
     queryKey: ["products", "active"],
     queryFn: () => api<Product[]>("/products?active_only=true"),
-    enabled: createOpen,
   });
 
   const { data: profiles = [] } = useQuery({
@@ -537,6 +536,7 @@ const Invoices = () => {
           </div>
           {canCreate && (
             <Button
+              className="w-full sm:w-auto h-11"
               onClick={() => {
                 resetCreateForm();
                 setCreateOpen(true);
@@ -704,11 +704,23 @@ const Invoices = () => {
             <div className="space-y-2">
               <Label>Add product</Label>
               <div className="flex gap-2">
-                <Select value={productToAdd} onValueChange={setProductToAdd}>
+                <Select
+                  value={productToAdd}
+                  onValueChange={setProductToAdd}
+                  disabled={productsLoading || products.length === 0}
+                >
                   <SelectTrigger className="flex-1">
-                    <SelectValue placeholder="Select product" />
+                    <SelectValue
+                      placeholder={
+                        productsLoading
+                          ? "Loading products..."
+                          : products.length === 0
+                            ? "No products available"
+                            : "Select product"
+                      }
+                    />
                   </SelectTrigger>
-                  <SelectContent>
+                  <SelectContent className="z-[100] max-h-[min(24rem,50vh)]">
                     {products.map((product) => (
                       <SelectItem key={product.id} value={product.id}>
                         {product.name} — ${Number(product.price).toFixed(2)}
@@ -716,7 +728,13 @@ const Invoices = () => {
                     ))}
                   </SelectContent>
                 </Select>
-                <Button type="button" variant="outline" onClick={addProductLine} disabled={!productToAdd}>
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="shrink-0 h-10"
+                  onClick={addProductLine}
+                  disabled={!productToAdd}
+                >
                   Add
                 </Button>
               </div>
@@ -836,11 +854,12 @@ const Invoices = () => {
               </div>
             </div>
 
-            <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={() => setCreateOpen(false)}>
+            <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 sticky bottom-0 bg-background pt-2 pb-1">
+              <Button variant="outline" className="w-full sm:w-auto h-11" onClick={() => setCreateOpen(false)}>
                 Cancel
               </Button>
               <Button
+                className="w-full sm:w-auto h-11"
                 disabled={!shopId || items.length === 0 || createMutation.isPending}
                 onClick={() => createMutation.mutate()}
               >
@@ -900,11 +919,15 @@ const Invoices = () => {
               <Label>Notes</Label>
               <Textarea value={payNotes} onChange={(e) => setPayNotes(e.target.value)} rows={2} />
             </div>
-            <div className="flex justify-end gap-2">
-              <Button variant="outline" onClick={() => setPaymentInvoice(null)}>
+            <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
+              <Button variant="outline" className="w-full sm:w-auto h-11" onClick={() => setPaymentInvoice(null)}>
                 Cancel
               </Button>
-              <Button disabled={paymentMutation.isPending} onClick={() => paymentMutation.mutate()}>
+              <Button
+                className="w-full sm:w-auto h-11"
+                disabled={paymentMutation.isPending}
+                onClick={() => paymentMutation.mutate()}
+              >
                 {paymentMutation.isPending ? "Saving..." : "Save Payment"}
               </Button>
             </div>

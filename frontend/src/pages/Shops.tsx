@@ -235,10 +235,11 @@ const Shops = () => {
             <p className="text-muted-foreground">Retail accounts and customer contacts</p>
           </div>
           {canManage && (
-            <div className="flex flex-wrap gap-2">
+            <div className="grid grid-cols-1 sm:flex sm:flex-wrap gap-2 w-full sm:w-auto">
               {isAdmin && (
                 <Button
                   variant="outline"
+                  className="w-full sm:w-auto h-11"
                   disabled={geocodeMutation.isPending}
                   onClick={() => geocodeMutation.mutate()}
                 >
@@ -246,11 +247,11 @@ const Shops = () => {
                   {geocodeMutation.isPending ? "Geocoding..." : "Geocode missing"}
                 </Button>
               )}
-              <Button variant="outline" onClick={() => setBulkOpen(true)}>
+              <Button variant="outline" className="w-full sm:w-auto h-11" onClick={() => setBulkOpen(true)}>
                 <Upload className="h-4 w-4 mr-2" />
                 Bulk Import
               </Button>
-              <Button onClick={openCreate}>
+              <Button className="w-full sm:w-auto h-11" onClick={openCreate}>
                 <Plus className="h-4 w-4 mr-2" />
                 Add Shop
               </Button>
@@ -262,7 +263,7 @@ const Shops = () => {
           placeholder="Search shops by name, owner, phone, city..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          className="max-w-md"
+          className="w-full max-w-md"
         />
 
         <BulkUploadDialog
@@ -274,7 +275,89 @@ const Shops = () => {
           }}
         />
 
-        <div className="rounded-md border">
+        {/* Mobile cards */}
+        <div className="md:hidden space-y-3">
+          {isLoading ? (
+            <p className="text-sm text-muted-foreground py-8 text-center">Loading...</p>
+          ) : filtered.length === 0 ? (
+            <p className="text-sm text-muted-foreground py-8 text-center">No shops found</p>
+          ) : (
+            filtered.map((shop) => (
+              <div
+                key={shop.id}
+                className={`rounded-lg border bg-card p-4 space-y-3 ${shop.is_frozen ? "opacity-70" : ""}`}
+              >
+                <div className="flex items-start justify-between gap-2">
+                  <div className="min-w-0">
+                    <p className="font-semibold truncate">{shop.name}</p>
+                    {shop.owner_name && (
+                      <p className="text-sm text-muted-foreground truncate">{shop.owner_name}</p>
+                    )}
+                  </div>
+                  <Badge variant={shop.is_frozen ? "secondary" : "default"} className="shrink-0">
+                    {shop.is_frozen ? "Frozen" : "Active"}
+                  </Badge>
+                </div>
+                <div className="space-y-1.5 text-sm text-muted-foreground">
+                  {shop.phone && (
+                    <a href={`tel:${shop.phone}`} className="flex items-center gap-2 hover:text-foreground">
+                      <Phone className="h-3.5 w-3.5 shrink-0" />
+                      {shop.phone}
+                    </a>
+                  )}
+                  {shop.email && (
+                    <a href={`mailto:${shop.email}`} className="flex items-center gap-2 hover:text-foreground break-all">
+                      <Mail className="h-3.5 w-3.5 shrink-0" />
+                      {shop.email}
+                    </a>
+                  )}
+                  {(shop.street_address || shop.city) && (
+                    <p className="flex items-start gap-2">
+                      <MapPin className="h-3.5 w-3.5 mt-0.5 shrink-0" />
+                      <span>{formatAddress(shop)}</span>
+                    </p>
+                  )}
+                </div>
+                {canManage && (
+                  <div className="flex gap-2 border-t pt-3">
+                    {isAdmin && (
+                      <Button
+                        variant="outline"
+                        className="flex-1 h-11"
+                        disabled={freezeMutation.isPending}
+                        onClick={() =>
+                          freezeMutation.mutate({
+                            id: shop.id,
+                            is_frozen: !shop.is_frozen,
+                          })
+                        }
+                      >
+                        {shop.is_frozen ? (
+                          <>
+                            <Sun className="h-4 w-4 mr-2 text-orange-500" />
+                            Unfreeze
+                          </>
+                        ) : (
+                          <>
+                            <Snowflake className="h-4 w-4 mr-2 text-blue-500" />
+                            Freeze
+                          </>
+                        )}
+                      </Button>
+                    )}
+                    <Button variant="outline" className="flex-1 h-11" onClick={() => openEdit(shop)}>
+                      <Edit className="h-4 w-4 mr-2" />
+                      Edit
+                    </Button>
+                  </div>
+                )}
+              </div>
+            ))
+          )}
+        </div>
+
+        {/* Desktop table */}
+        <div className="hidden md:block rounded-md border overflow-x-auto">
           <Table>
             <TableHeader>
               <TableRow>
@@ -407,10 +490,11 @@ const Shops = () => {
                 onChange={(e) => setForm({ ...form, owner_name: e.target.value })}
               />
             </div>
-            <div className="grid grid-cols-2 gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-2">
                 <Label>Phone</Label>
                 <Input
+                  type="tel"
                   value={form.phone}
                   onChange={(e) => setForm({ ...form, phone: e.target.value })}
                 />
@@ -438,8 +522,8 @@ const Shops = () => {
                 onChange={(e) => setForm({ ...form, street_address_line_2: e.target.value })}
               />
             </div>
-            <div className="grid grid-cols-3 gap-3">
-              <div className="space-y-2 col-span-1">
+            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+              <div className="space-y-2">
                 <Label>City</Label>
                 <Input
                   value={form.city}
@@ -461,11 +545,12 @@ const Shops = () => {
                 />
               </div>
             </div>
-            <div className="flex justify-end gap-2 pt-2">
-              <Button variant="outline" onClick={() => setOpen(false)}>
+            <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 pt-2">
+              <Button variant="outline" className="w-full sm:w-auto h-11" onClick={() => setOpen(false)}>
                 Cancel
               </Button>
               <Button
+                className="w-full sm:w-auto h-11"
                 disabled={!form.name.trim() || saveMutation.isPending}
                 onClick={() => saveMutation.mutate()}
               >

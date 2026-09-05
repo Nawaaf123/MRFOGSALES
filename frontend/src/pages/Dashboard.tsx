@@ -1,4 +1,4 @@
-import { lazy, Suspense } from "react";
+import { lazy, Suspense, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { api } from "@/lib/api";
@@ -10,6 +10,7 @@ import {
   DollarSign,
   Percent,
   AlertCircle,
+  Map as MapIcon,
 } from "lucide-react";
 import { StatsCard } from "@/components/dashboard/StatsCard";
 import { LowStockAlert } from "@/components/dashboard/LowStockAlert";
@@ -18,6 +19,7 @@ import { TopProducts } from "@/components/dashboard/TopProducts";
 import { TopShops } from "@/components/dashboard/TopShops";
 import { RecentActivity } from "@/components/dashboard/RecentActivity";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
+import { Button } from "@/components/ui/button";
 import { LocationTracker } from "@/components/location/LocationTracker";
 
 const LocationsMap = lazy(() =>
@@ -36,6 +38,10 @@ type DashboardStats = {
 const Dashboard = () => {
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
+  // Don't auto-load heavy Mapbox bundle on phones — tap to open
+  const [showMap, setShowMap] = useState(() =>
+    typeof window !== "undefined" ? window.matchMedia("(min-width: 768px)").matches : true
+  );
 
   const { data: stats, isLoading } = useQuery({
     queryKey: ["dashboard-stats"],
@@ -142,21 +148,39 @@ const Dashboard = () => {
 
         {isAdmin && (
           <div className="space-y-3">
-            <div>
-              <h2 className="text-lg font-semibold">Locations map</h2>
-              <p className="text-sm text-muted-foreground">
-                Shop pins and live salesperson GPS on one map
-              </p>
+            <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
+              <div>
+                <h2 className="text-lg font-semibold">Locations map</h2>
+                <p className="text-sm text-muted-foreground">
+                  Shop pins and live salesperson GPS on one map
+                </p>
+              </div>
+              {!showMap && (
+                <Button
+                  variant="outline"
+                  className="w-full sm:w-auto h-11"
+                  onClick={() => setShowMap(true)}
+                >
+                  <MapIcon className="h-4 w-4 mr-2" />
+                  Load map
+                </Button>
+              )}
             </div>
-            <Suspense
-              fallback={
-                <div className="flex h-[400px] items-center justify-center rounded-md border text-sm text-muted-foreground">
-                  Loading map...
-                </div>
-              }
-            >
-              <LocationsMap />
-            </Suspense>
+            {showMap ? (
+              <Suspense
+                fallback={
+                  <div className="flex h-[280px] md:h-[400px] items-center justify-center rounded-md border text-sm text-muted-foreground">
+                    Loading map...
+                  </div>
+                }
+              >
+                <LocationsMap heightClassName="h-[280px] md:h-[420px]" />
+              </Suspense>
+            ) : (
+              <div className="flex h-[120px] items-center justify-center rounded-md border border-dashed text-sm text-muted-foreground px-4 text-center">
+                Map paused on mobile to save data — tap Load map when you need it
+              </div>
+            )}
           </div>
         )}
 
