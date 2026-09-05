@@ -48,6 +48,15 @@ import {
 } from "@/components/ui/command";
 import { useAuth } from "@/lib/auth";
 import { api, ApiError } from "@/lib/api";
+import {
+  clearInvoiceCreateDraft,
+  draftHasWork,
+  isNetworkApiError,
+  loadInvoiceCreateDraft,
+  newClientRequestId,
+  saveInvoiceCreateDraft,
+  type InvoiceCreateDraft,
+} from "@/lib/invoiceCreateDraft";
 import { useToast } from "@/hooks/use-toast";
 import { generateInvoicePDF, saveInvoicePDF } from "@/lib/pdfGenerator";
 import { CreditDialog } from "@/components/invoices/CreditDialog";
@@ -197,11 +206,8 @@ const Invoices = () => {
   }, [search]);
 
   const [createOpen, setCreateOpen] = useState(false);
-  const clientRequestIdRef = useRef(
-    typeof crypto !== "undefined" && crypto.randomUUID
-      ? crypto.randomUUID()
-      : `inv-${Date.now()}-${Math.random().toString(16).slice(2)}`,
-  );
+  const clientRequestIdRef = useRef(newClientRequestId());
+  const skipNextDraftPersistRef = useRef(false);
   const [shopId, setShopId] = useState("");
   const [notes, setNotes] = useState("");
   const [discountAmount, setDiscountAmount] = useState("");
@@ -391,11 +397,9 @@ const Invoices = () => {
   const createPaymentsTotal =
     (Number(cashAmount) || 0) + (Number(checkAmount) || 0) + (Number(creditAmount) || 0);
 
-  const resetCreateForm = () => {
-    clientRequestIdRef.current =
-      typeof crypto !== "undefined" && crypto.randomUUID
-        ? crypto.randomUUID()
-        : `inv-${Date.now()}-${Math.random().toString(16).slice(2)}`;
+  const resetCreateForm = (opts?: { clearDraft?: boolean }) => {
+    skipNextDraftPersistRef.current = true;
+    clientRequestIdRef.current = newClientRequestId();
     setShopId("");
     setNotes("");
     setDiscountAmount("");
@@ -407,7 +411,84 @@ const Invoices = () => {
     setCashAmount("");
     setCheckAmount("");
     setCreditAmount("");
+    if (opts?.clearDraft !== false && user?.id) {
+      clearInvoiceCreateDraft(user.id);
+    }
   };
+
+  const applyDraft = (draft: InvoiceCreateDraft) => {
+    skipNextDraftPersistRef.current = true;
+    clientRequestIdRef.current = draft.client_request_id;
+    setShopId(draft.shop_id || "");
+    setNotes(draft.notes || "");
+    setDiscountAmount(draft.discount_amount || "");
+    setWarehouse(draft.warehouse === "B" ? "B" : "A");
+    setItems(Array.isArray(draft.items) ? draft.items : []);
+    setProductSearch("");
+    setCreateCategoryFilter("all");
+    setCreateSubcategoryFilter("all");
+    setCashAmount(draft.cash_amount || "");
+    setCheckAmount(draft.check_amount || "");
+    setCreditAmount(draft.credit_amount || "");
+  };
+
+  const openCreateInvoice = () => {
+    if (user?.id) {
+      const draft = loadInvoiceCreateDraft(user.id);
+      if (draftHasWork(draft)) {
+        applyDraft(draft!);
+        setCreateOpen(true);
+        toast({
+          title: "Draft restored",
+          description: "Your unsaved invoice was loaded. Create when you’re back online.",
+        });
+        return;
+      }
+    }
+    resetCreateForm({ clearDraft: true });
+    setCreateOpen(true);
+  };
+
+  // Keep draft on device while sales build the invoice (survives refresh / weak signal).
+  useEffect(() => {
+    if (!user?.id) return;
+    if (skipNextDraftPersistRef.current) {
+      skipNextDraftPersistRef.current = false;
+      return;
+    }
+    if (!createOpen && !shopId && items.length === 0 && !notes.trim()) return;
+
+    const timer = window.setTimeout(() => {
+      if (!user.id) return;
+      const draft: InvoiceCreateDraft = {
+        version: 1,
+        client_request_id: clientRequestIdRef.current,
+        shop_id: shopId,
+        notes,
+        discount_amount: discountAmount,
+        warehouse,
+        items,
+        cash_amount: cashAmount,
+        check_amount: checkAmount,
+        credit_amount: creditAmount,
+        updated_at: new Date().toISOString(),
+      };
+      if (draftHasWork(draft)) saveInvoiceCreateDraft(user.id, draft);
+      else clearInvoiceCreateDraft(user.id);
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [
+    user?.id,
+    createOpen,
+    shopId,
+    notes,
+    discountAmount,
+    warehouse,
+    items,
+    cashAmount,
+    checkAmount,
+    creditAmount,
+  ]);
 
   const addProductQuick = (product: Product) => {
     setItems((prev) => {
@@ -449,7 +530,7 @@ const Invoices = () => {
   };
 
   const createMutation = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
       if (!shopId) throw { message: "Select a shop" } satisfies ApiError;
       if (items.length === 0) throw { message: "Add at least one product" } satisfies ApiError;
       if (createPaymentsTotal > totalAmount + 0.01) {
@@ -464,34 +545,69 @@ const Invoices = () => {
       if (check > 0) payments.push({ amount: check, payment_method: "check" });
       if (credit > 0) payments.push({ amount: credit, payment_method: "credit" });
 
-      return api<Invoice>("/invoices", {
-        method: "POST",
-        body: JSON.stringify({
+      // Persist immediately before network call so a crash mid-request still restores.
+      if (user?.id) {
+        saveInvoiceCreateDraft(user.id, {
+          version: 1,
           client_request_id: clientRequestIdRef.current,
           shop_id: shopId,
-          items: items.map((item) => ({
-            product_id: item.product_id,
-            product_name: item.product_name,
-            quantity: item.quantity,
-            unit_price: item.unit_price,
-            subtotal: item.subtotal,
-          })),
-          discount_amount: discount,
-          notes: notes.trim() || null,
+          notes,
+          discount_amount: discountAmount,
           warehouse,
-          payments,
-        }),
+          items,
+          cash_amount: cashAmount,
+          check_amount: checkAmount,
+          credit_amount: creditAmount,
+          updated_at: new Date().toISOString(),
+        });
+      }
+
+      const body = JSON.stringify({
+        client_request_id: clientRequestIdRef.current,
+        shop_id: shopId,
+        items: items.map((item) => ({
+          product_id: item.product_id,
+          product_name: item.product_name,
+          quantity: item.quantity,
+          unit_price: item.unit_price,
+          subtotal: item.subtotal,
+        })),
+        discount_amount: discount,
+        notes: notes.trim() || null,
+        warehouse,
+        payments,
       });
+
+      const maxAttempts = 4;
+      let lastError: ApiError = { message: "Create failed" };
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        try {
+          return await api<Invoice>("/invoices", { method: "POST", body });
+        } catch (err) {
+          lastError = err as ApiError;
+          if (!isNetworkApiError(lastError) || attempt === maxAttempts - 1) throw lastError;
+          await new Promise((r) => setTimeout(r, 600 * (attempt + 1)));
+        }
+      }
+      throw lastError;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["invoices"] });
       queryClient.invalidateQueries({ queryKey: ["products"] });
       queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
       setCreateOpen(false);
-      resetCreateForm();
+      resetCreateForm({ clearDraft: true });
       toast({ title: "Invoice created" });
     },
     onError: (error: ApiError) => {
+      if (isNetworkApiError(error)) {
+        toast({
+          title: "No network — draft saved",
+          description: "Your invoice is kept on this phone. Tap Create again when you’re online (won’t double).",
+          variant: "destructive",
+        });
+        return;
+      }
       toast({ title: "Error", description: error.message, variant: "destructive" });
     },
   });
@@ -639,10 +755,7 @@ const Invoices = () => {
           {canCreate && (
             <Button
               className="w-full sm:w-auto h-11"
-              onClick={() => {
-                resetCreateForm();
-                setCreateOpen(true);
-              }}
+              onClick={openCreateInvoice}
             >
               <Plus className="h-4 w-4 mr-2" />
               New Invoice
@@ -771,7 +884,7 @@ const Invoices = () => {
         open={createOpen}
         onOpenChange={(next) => {
           setCreateOpen(next);
-          if (!next) resetCreateForm();
+          // Closing keeps the on-device draft; only success / explicit new form clears it.
         }}
       >
         <DialogContent className="max-w-2xl w-[calc(100vw-1rem)] sm:w-full max-h-[90dvh] overflow-x-hidden overflow-y-auto p-3 sm:p-6">
@@ -1179,6 +1292,20 @@ const Invoices = () => {
             </div>
 
             <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 sticky bottom-0 bg-background pt-2 pb-1">
+              {(shopId || items.length > 0 || notes.trim()) && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="w-full sm:w-auto h-11 text-destructive"
+                  disabled={createMutation.isPending}
+                  onClick={() => {
+                    resetCreateForm({ clearDraft: true });
+                    toast({ title: "Draft discarded" });
+                  }}
+                >
+                  Discard draft
+                </Button>
+              )}
               <Button variant="outline" className="w-full sm:w-auto h-11" onClick={() => setCreateOpen(false)}>
                 Cancel
               </Button>
