@@ -1,4 +1,5 @@
 from uuid import UUID
+from typing import Union
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy.orm import Session
@@ -6,21 +7,35 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user, require_roles
 from app.db.session import get_db
 from app.models import AppRole, Product, User
-from app.schemas import ProductCreate, ProductOut, ProductUpdate
+from app.schemas import ProductBrief, ProductCreate, ProductOut, ProductUpdate
 
 router = APIRouter(prefix="/products", tags=["products"])
 
 
-@router.get("", response_model=list[ProductOut])
+@router.get("", response_model=None)
 def list_products(
     active_only: bool = Query(default=False),
+    brief: bool = Query(default=False),
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
-) -> list[Product]:
+) -> Union[list[ProductBrief], list[ProductOut]]:
     query = db.query(Product).order_by(Product.name.asc())
     if active_only:
         query = query.filter(Product.is_active.is_(True))
-    return query.all()
+    products = query.all()
+    if brief:
+        return [
+            ProductBrief(
+                id=p.id,
+                name=p.name,
+                sku=p.sku,
+                category=p.category,
+                subcategory=p.subcategory,
+                price=float(p.price or 0),
+            )
+            for p in products
+        ]
+    return products
 
 
 @router.post("", response_model=ProductOut, status_code=status.HTTP_201_CREATED)

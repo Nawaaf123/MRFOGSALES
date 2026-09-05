@@ -32,3 +32,13 @@ output "app_secret" {
   value     = random_password.app_secret.result
   sensitive = true
 }
+
+output "db_backup_bucket" {
+  value       = aws_s3_bucket.db_backups.bucket
+  description = "S3 bucket for nightly Postgres dumps (postgres/ prefix)."
+}
+
+output "ebs_snapshot_policy_id" {
+  value       = aws_dlm_lifecycle_policy.ebs_daily.id
+  description = "DLM policy for daily EBS snapshots (retain 7)."
+}

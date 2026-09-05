@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { useNavigate, useLocation } from "react-router-dom";
+import { Outlet, useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
 import { LogOut, Package, ShoppingBag, FileText, Users, LayoutDashboard, BarChart3, TrendingUp, Menu } from "lucide-react";
@@ -7,14 +7,16 @@ import mrFogLogo from "@/assets/mr-fog-logo.jpg";
 import { cn } from "@/lib/utils";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { MobileBottomNav } from "@/components/MobileBottomNav";
+import { LocationTracker } from "@/components/location/LocationTracker";
 
-export const DashboardLayout = ({ children }: { children: React.ReactNode }) => {
+export const DashboardLayout = ({ children }: { children?: React.ReactNode }) => {
   const { signOut, user } = useAuth();
   const navigate = useNavigate();
   const location = useLocation();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
 
   const userRole = user?.role || null;
+  const isSalesLike = userRole === "sales" || userRole === "srour";
 
   const handleSignOut = async () => {
     await signOut();
@@ -42,6 +44,7 @@ export const DashboardLayout = ({ children }: { children: React.ReactNode }) => 
 
   return (
     <div className="min-h-screen bg-background safe-area-inset">
+      {isSalesLike && <LocationTracker />}
       <header className="border-b bg-card/95 backdrop-blur sticky top-0 z-50 supports-[backdrop-filter]:bg-card/90">
         <div className="container mx-auto flex h-14 md:h-16 items-center justify-between px-3 sm:px-4">
           <div className="flex items-center gap-2 md:gap-8 min-w-0">
@@ -122,7 +125,9 @@ export const DashboardLayout = ({ children }: { children: React.ReactNode }) => 
           </div>
         </div>
       </header>
-      <main className="container mx-auto px-3 py-4 sm:px-4 md:p-6 pb-24 md:pb-6">{children}</main>
+      <main className="container mx-auto px-3 py-4 sm:px-4 md:p-6 pb-24 md:pb-6">
+        {children ?? <Outlet />}
+      </main>
       <MobileBottomNav />
     </div>
   );

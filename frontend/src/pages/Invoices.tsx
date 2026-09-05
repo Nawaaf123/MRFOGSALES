@@ -1,6 +1,5 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
-import { DashboardLayout } from "@/components/DashboardLayout";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -38,14 +37,33 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
 import { useAuth } from "@/lib/auth";
 import { api, ApiError } from "@/lib/api";
+import {
+  clearInvoiceCreateDraft,
+  draftHasWork,
+  isNetworkApiError,
+  loadInvoiceCreateDraft,
+  newClientRequestId,
+  saveInvoiceCreateDraft,
+  type InvoiceCreateDraft,
+} from "@/lib/invoiceCreateDraft";
 import { useToast } from "@/hooks/use-toast";
 import { generateInvoicePDF, saveInvoicePDF } from "@/lib/pdfGenerator";
 import { CreditDialog } from "@/components/invoices/CreditDialog";
 import { DistributePaymentDialog } from "@/components/invoices/DistributePaymentDialog";
 import { ShopInvoiceGroup } from "@/components/invoices/ShopInvoiceGroup";
-import { Plus, Trash2 } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { Check, ChevronsUpDown, Plus, Trash2 } from "lucide-react";
 
 type Shop = {
   id: string;
@@ -56,9 +74,11 @@ type Shop = {
 type Product = {
   id: string;
   name: string;
+  sku?: string | null;
   price: number;
   is_active: boolean;
   category: string;
+  subcategory?: string | null;
 };
 
 type UserProfile = {
@@ -109,8 +129,8 @@ type Invoice = {
   notes: string | null;
   warehouse: "A" | "B" | null;
   created_at: string;
-  items: InvoiceItem[];
-  payments: InvoicePayment[];
+  items?: InvoiceItem[];
+  payments?: InvoicePayment[];
   shop: InvoiceShop | null;
   amount_paid: number;
 };
@@ -151,10 +171,15 @@ function pdfDocToBase64(doc: { output: (type: string) => string }): string {
 type LineItemDraft = {
   product_id: string;
   product_name: string;
+  product_sku?: string | null;
   quantity: number;
   unit_price: number;
   subtotal: number;
 };
+
+function skuSortKey(sku: string | null | undefined) {
+  return (sku || "").trim().toLowerCase();
+}
 
 const statusBadgeVariant = (status: PaymentStatus): "default" | "secondary" | "destructive" => {
   if (status === "paid") return "default";
@@ -171,16 +196,28 @@ const Invoices = () => {
   const isAdmin = user?.role === "admin";
 
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [shopFilter, setShopFilter] = useState("all");
 
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedSearch(search.trim()), 300);
+    return () => window.clearTimeout(timer);
+  }, [search]);
+
   const [createOpen, setCreateOpen] = useState(false);
+  const clientRequestIdRef = useRef(newClientRequestId());
+  const skipNextDraftPersistRef = useRef(false);
   const [shopId, setShopId] = useState("");
   const [notes, setNotes] = useState("");
   const [discountAmount, setDiscountAmount] = useState("");
   const [warehouse, setWarehouse] = useState<"A" | "B">(user?.assigned_warehouse || "A");
   const [items, setItems] = useState<LineItemDraft[]>([]);
-  const [productToAdd, setProductToAdd] = useState("");
+  const [productSearch, setProductSearch] = useState("");
+  const [createCategoryFilter, setCreateCategoryFilter] = useState("all");
+  const [createSubcategoryFilter, setCreateSubcategoryFilter] = useState("all");
+  const [createCategoryOpen, setCreateCategoryOpen] = useState(false);
+  const [createSubcategoryOpen, setCreateSubcategoryOpen] = useState(false);
   const [cashAmount, setCashAmount] = useState("");
   const [checkAmount, setCheckAmount] = useState("");
   const [creditAmount, setCreditAmount] = useState("");
@@ -205,12 +242,12 @@ const Invoices = () => {
 
   const invoiceQueryParams = useMemo(() => {
     const params = new URLSearchParams();
-    if (search.trim()) params.set("search", search.trim());
+    if (debouncedSearch) params.set("search", debouncedSearch);
     if (statusFilter !== "all") params.set("payment_status", statusFilter);
     if (shopFilter !== "all") params.set("shop_id", shopFilter);
     const qs = params.toString();
     return qs ? `?${qs}` : "";
-  }, [search, statusFilter, shopFilter]);
+  }, [debouncedSearch, statusFilter, shopFilter]);
 
   const { data: invoices = [], isLoading } = useQuery({
     queryKey: ["invoices", invoiceQueryParams],
@@ -223,9 +260,73 @@ const Invoices = () => {
   });
 
   const { data: products = [], isLoading: productsLoading } = useQuery({
-    queryKey: ["products", "active"],
-    queryFn: () => api<Product[]>("/products?active_only=true"),
+    queryKey: ["products", "active", "brief"],
+    queryFn: () => api<Product[]>("/products?active_only=true&brief=true"),
+    enabled: createOpen,
   });
+
+  const createCategories = useMemo(() => {
+    return Array.from(new Set(products.map((p) => p.category).filter(Boolean))).sort((a, b) =>
+      a.localeCompare(b)
+    );
+  }, [products]);
+
+  const createSubcategories = useMemo(() => {
+    const pool =
+      createCategoryFilter === "all"
+        ? products
+        : products.filter((p) => p.category === createCategoryFilter);
+    return Array.from(
+      new Set(pool.map((p) => p.subcategory).filter((s): s is string => Boolean(s)))
+    ).sort((a, b) => a.localeCompare(b));
+  }, [products, createCategoryFilter]);
+
+  const canShowProductList =
+    createCategoryFilter !== "all" || productSearch.trim().length >= 2;
+
+  const filteredCreateProducts = useMemo(() => {
+    if (!canShowProductList) return [];
+    const q = productSearch.trim().toLowerCase();
+    const rows = products.filter((p) => {
+      if (createCategoryFilter !== "all" && p.category !== createCategoryFilter) return false;
+      if (
+        createSubcategoryFilter !== "all" &&
+        (p.subcategory || "") !== createSubcategoryFilter
+      ) {
+        return false;
+      }
+      if (!q) return true;
+      return (
+        p.name.toLowerCase().includes(q) ||
+        (p.sku || "").toLowerCase().includes(q) ||
+        p.category.toLowerCase().includes(q) ||
+        (p.subcategory || "").toLowerCase().includes(q)
+      );
+    });
+    return [...rows].sort((a, b) => {
+      const sa = skuSortKey(a.sku);
+      const sb = skuSortKey(b.sku);
+      if (!sa && !sb) return a.name.localeCompare(b.name);
+      if (!sa) return 1;
+      if (!sb) return -1;
+      const cmp = sa.localeCompare(sb, undefined, { numeric: true, sensitivity: "base" });
+      return cmp !== 0 ? cmp : a.name.localeCompare(b.name);
+    });
+  }, [
+    products,
+    productSearch,
+    createCategoryFilter,
+    createSubcategoryFilter,
+    canShowProductList,
+  ]);
+
+  const itemQtyByProduct = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const item of items) {
+      map.set(item.product_id, (map.get(item.product_id) || 0) + item.quantity);
+    }
+    return map;
+  }, [items]);
 
   const { data: profiles = [] } = useQuery({
     queryKey: ["users", "profiles-for-invoices"],
@@ -296,44 +397,125 @@ const Invoices = () => {
   const createPaymentsTotal =
     (Number(cashAmount) || 0) + (Number(checkAmount) || 0) + (Number(creditAmount) || 0);
 
-  const resetCreateForm = () => {
+  const resetCreateForm = (opts?: { clearDraft?: boolean }) => {
+    skipNextDraftPersistRef.current = true;
+    clientRequestIdRef.current = newClientRequestId();
     setShopId("");
     setNotes("");
     setDiscountAmount("");
     setWarehouse(user?.assigned_warehouse || "A");
     setItems([]);
-    setProductToAdd("");
+    setProductSearch("");
+    setCreateCategoryFilter("all");
+    setCreateSubcategoryFilter("all");
     setCashAmount("");
     setCheckAmount("");
     setCreditAmount("");
+    if (opts?.clearDraft !== false && user?.id) {
+      clearInvoiceCreateDraft(user.id);
+    }
   };
 
-  const addProductLine = () => {
-    const product = products.find((p) => p.id === productToAdd);
-    if (!product) return;
-    const existing = items.findIndex((i) => i.product_id === product.id);
-    if (existing >= 0) {
-      const next = [...items];
-      next[existing] = {
-        ...next[existing],
-        quantity: next[existing].quantity + 1,
-        subtotal: (next[existing].quantity + 1) * next[existing].unit_price,
+  const applyDraft = (draft: InvoiceCreateDraft) => {
+    skipNextDraftPersistRef.current = true;
+    clientRequestIdRef.current = draft.client_request_id;
+    setShopId(draft.shop_id || "");
+    setNotes(draft.notes || "");
+    setDiscountAmount(draft.discount_amount || "");
+    setWarehouse(draft.warehouse === "B" ? "B" : "A");
+    setItems(Array.isArray(draft.items) ? draft.items : []);
+    setProductSearch("");
+    setCreateCategoryFilter("all");
+    setCreateSubcategoryFilter("all");
+    setCashAmount(draft.cash_amount || "");
+    setCheckAmount(draft.check_amount || "");
+    setCreditAmount(draft.credit_amount || "");
+  };
+
+  const openCreateInvoice = () => {
+    if (user?.id) {
+      const draft = loadInvoiceCreateDraft(user.id);
+      if (draftHasWork(draft)) {
+        applyDraft(draft!);
+        setCreateOpen(true);
+        toast({
+          title: "Draft restored",
+          description: "Your unsaved invoice was loaded. Create when you’re back online.",
+        });
+        return;
+      }
+    }
+    resetCreateForm({ clearDraft: true });
+    setCreateOpen(true);
+  };
+
+  // Keep draft on device while sales build the invoice (survives refresh / weak signal).
+  useEffect(() => {
+    if (!user?.id) return;
+    if (skipNextDraftPersistRef.current) {
+      skipNextDraftPersistRef.current = false;
+      return;
+    }
+    if (!createOpen && !shopId && items.length === 0 && !notes.trim()) return;
+
+    const timer = window.setTimeout(() => {
+      if (!user.id) return;
+      const draft: InvoiceCreateDraft = {
+        version: 1,
+        client_request_id: clientRequestIdRef.current,
+        shop_id: shopId,
+        notes,
+        discount_amount: discountAmount,
+        warehouse,
+        items,
+        cash_amount: cashAmount,
+        check_amount: checkAmount,
+        credit_amount: creditAmount,
+        updated_at: new Date().toISOString(),
       };
-      setItems(next);
-    } else {
+      if (draftHasWork(draft)) saveInvoiceCreateDraft(user.id, draft);
+      else clearInvoiceCreateDraft(user.id);
+    }, 300);
+    return () => window.clearTimeout(timer);
+  }, [
+    user?.id,
+    createOpen,
+    shopId,
+    notes,
+    discountAmount,
+    warehouse,
+    items,
+    cashAmount,
+    checkAmount,
+    creditAmount,
+  ]);
+
+  const addProductQuick = (product: Product) => {
+    setItems((prev) => {
+      const existing = prev.findIndex((i) => i.product_id === product.id);
+      if (existing >= 0) {
+        const next = [...prev];
+        const qty = next[existing].quantity + 1;
+        next[existing] = {
+          ...next[existing],
+          quantity: qty,
+          subtotal: qty * next[existing].unit_price,
+        };
+        return next;
+      }
       const price = Number(product.price) || 0;
-      setItems([
-        ...items,
+      return [
+        ...prev,
         {
           product_id: product.id,
           product_name: product.name,
+          product_sku: product.sku || null,
           quantity: 1,
           unit_price: price,
           subtotal: price,
         },
-      ]);
-    }
-    setProductToAdd("");
+      ];
+    });
   };
 
   const updateLine = (index: number, field: "quantity" | "unit_price", value: number) => {
@@ -348,7 +530,7 @@ const Invoices = () => {
   };
 
   const createMutation = useMutation({
-    mutationFn: () => {
+    mutationFn: async () => {
       if (!shopId) throw { message: "Select a shop" } satisfies ApiError;
       if (items.length === 0) throw { message: "Add at least one product" } satisfies ApiError;
       if (createPaymentsTotal > totalAmount + 0.01) {
@@ -363,33 +545,69 @@ const Invoices = () => {
       if (check > 0) payments.push({ amount: check, payment_method: "check" });
       if (credit > 0) payments.push({ amount: credit, payment_method: "credit" });
 
-      return api<Invoice>("/invoices", {
-        method: "POST",
-        body: JSON.stringify({
+      // Persist immediately before network call so a crash mid-request still restores.
+      if (user?.id) {
+        saveInvoiceCreateDraft(user.id, {
+          version: 1,
+          client_request_id: clientRequestIdRef.current,
           shop_id: shopId,
-          items: items.map((item) => ({
-            product_id: item.product_id,
-            product_name: item.product_name,
-            quantity: item.quantity,
-            unit_price: item.unit_price,
-            subtotal: item.subtotal,
-          })),
-          discount_amount: discount,
-          notes: notes.trim() || null,
+          notes,
+          discount_amount: discountAmount,
           warehouse,
-          payments,
-        }),
+          items,
+          cash_amount: cashAmount,
+          check_amount: checkAmount,
+          credit_amount: creditAmount,
+          updated_at: new Date().toISOString(),
+        });
+      }
+
+      const body = JSON.stringify({
+        client_request_id: clientRequestIdRef.current,
+        shop_id: shopId,
+        items: items.map((item) => ({
+          product_id: item.product_id,
+          product_name: item.product_name,
+          quantity: item.quantity,
+          unit_price: item.unit_price,
+          subtotal: item.subtotal,
+        })),
+        discount_amount: discount,
+        notes: notes.trim() || null,
+        warehouse,
+        payments,
       });
+
+      const maxAttempts = 4;
+      let lastError: ApiError = { message: "Create failed" };
+      for (let attempt = 0; attempt < maxAttempts; attempt++) {
+        try {
+          return await api<Invoice>("/invoices", { method: "POST", body });
+        } catch (err) {
+          lastError = err as ApiError;
+          if (!isNetworkApiError(lastError) || attempt === maxAttempts - 1) throw lastError;
+          await new Promise((r) => setTimeout(r, 600 * (attempt + 1)));
+        }
+      }
+      throw lastError;
     },
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["invoices"] });
       queryClient.invalidateQueries({ queryKey: ["products"] });
       queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
       setCreateOpen(false);
-      resetCreateForm();
+      resetCreateForm({ clearDraft: true });
       toast({ title: "Invoice created" });
     },
     onError: (error: ApiError) => {
+      if (isNetworkApiError(error)) {
+        toast({
+          title: "No network — draft saved",
+          description: "Your invoice is kept on this phone. Tap Create again when you’re online (won’t double).",
+          variant: "destructive",
+        });
+        return;
+      }
       toast({ title: "Error", description: error.message, variant: "destructive" });
     },
   });
@@ -527,7 +745,7 @@ const Invoices = () => {
   };
 
   return (
-    <DashboardLayout>
+    <>
       <div className="space-y-4">
         <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
           <div>
@@ -537,10 +755,7 @@ const Invoices = () => {
           {canCreate && (
             <Button
               className="w-full sm:w-auto h-11"
-              onClick={() => {
-                resetCreateForm();
-                setCreateOpen(true);
-              }}
+              onClick={openCreateInvoice}
             >
               <Plus className="h-4 w-4 mr-2" />
               New Invoice
@@ -614,25 +829,35 @@ const Invoices = () => {
                   amount_paid: inv.amount_paid,
                 }))}
                 onViewInvoice={(inv) => {
-                  const full = invoices.find((i) => i.id === inv.id) || null;
-                  setViewInvoice(full);
+                  void (async () => {
+                    try {
+                      const full = await api<Invoice>(`/invoices/${inv.id}`);
+                      setViewInvoice(full);
+                    } catch (error: unknown) {
+                      const message =
+                        error && typeof error === "object" && "message" in error
+                          ? String((error as ApiError).message)
+                          : "Could not load invoice";
+                      toast({ title: "Error", description: message, variant: "destructive" });
+                    }
+                  })();
                 }}
                 onRecordPayment={(inv) => {
-                  const full = invoices.find((i) => i.id === inv.id);
-                  if (full) openPayment(full);
+                  const row = invoices.find((i) => i.id === inv.id);
+                  if (row) openPayment(row);
                 }}
                 onExportPDF={(inv) => {
-                  const full = invoices.find((i) => i.id === inv.id);
-                  if (full) void exportPdf(full);
+                  const row = invoices.find((i) => i.id === inv.id);
+                  if (row) void exportPdf(row);
                 }}
                 onSendEmail={(inv) => {
-                  const full = invoices.find((i) => i.id === inv.id);
-                  if (full) void emailInvoice(full);
+                  const row = invoices.find((i) => i.id === inv.id);
+                  if (row) void emailInvoice(row);
                 }}
                 sendingEmailId={emailingId}
                 onDeleteInvoice={(inv) => {
-                  const full = invoices.find((i) => i.id === inv.id) || null;
-                  setDeleteInvoice(full);
+                  const row = invoices.find((i) => i.id === inv.id) || null;
+                  setDeleteInvoice(row);
                 }}
                 onDistributePayment={(shopId, shopName, pendingInvs, totalPending) => {
                   const fullInvoices = pendingInvs
@@ -659,19 +884,19 @@ const Invoices = () => {
         open={createOpen}
         onOpenChange={(next) => {
           setCreateOpen(next);
-          if (!next) resetCreateForm();
+          // Closing keeps the on-device draft; only success / explicit new form clears it.
         }}
       >
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-2xl w-[calc(100vw-1rem)] sm:w-full max-h-[90dvh] overflow-x-hidden overflow-y-auto p-3 sm:p-6">
           <DialogHeader>
             <DialogTitle>Create Invoice</DialogTitle>
           </DialogHeader>
-          <div className="space-y-4">
+          <div className="space-y-4 min-w-0 overflow-x-hidden">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div className="space-y-2">
+              <div className="space-y-2 min-w-0">
                 <Label>Shop *</Label>
                 <Select value={shopId} onValueChange={setShopId}>
-                  <SelectTrigger>
+                  <SelectTrigger className="w-full">
                     <SelectValue placeholder="Select shop" />
                   </SelectTrigger>
                   <SelectContent>
@@ -683,14 +908,14 @@ const Invoices = () => {
                   </SelectContent>
                 </Select>
               </div>
-              <div className="space-y-2">
+              <div className="space-y-2 min-w-0">
                 <Label>Warehouse</Label>
                 <Select
                   value={warehouse}
                   onValueChange={(v) => setWarehouse(v as "A" | "B")}
                   disabled={!canPickWarehouse}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger className="w-full">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -701,97 +926,309 @@ const Invoices = () => {
               </div>
             </div>
 
-            <div className="space-y-2">
-              <Label>Add product</Label>
-              <div className="flex gap-2">
-                <Select
-                  value={productToAdd}
-                  onValueChange={setProductToAdd}
-                  disabled={productsLoading || products.length === 0}
-                >
-                  <SelectTrigger className="flex-1">
-                    <SelectValue
-                      placeholder={
-                        productsLoading
-                          ? "Loading products..."
-                          : products.length === 0
-                            ? "No products available"
-                            : "Select product"
-                      }
-                    />
-                  </SelectTrigger>
-                  <SelectContent className="z-[100] max-h-[min(24rem,50vh)]">
-                    {products.map((product) => (
-                      <SelectItem key={product.id} value={product.id}>
-                        {product.name} — ${Number(product.price).toFixed(2)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="shrink-0 h-10"
-                  onClick={addProductLine}
-                  disabled={!productToAdd}
-                >
-                  Add
-                </Button>
+            <div className="space-y-3 rounded-md border p-3 min-w-0">
+              <div className="flex flex-col gap-0.5">
+                <Label className="text-base">Products</Label>
+                <span className="text-xs text-muted-foreground">Tap a product to add · change qty below</span>
+              </div>
+
+              <div className="grid grid-cols-1 gap-2 min-w-0">
+                <Input
+                  placeholder="Search SKU or flavor..."
+                  value={productSearch}
+                  onChange={(e) => setProductSearch(e.target.value)}
+                  className="w-full min-w-0"
+                />
+
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 min-w-0">
+                <Popover open={createCategoryOpen} onOpenChange={setCreateCategoryOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      role="combobox"
+                      className="w-full min-w-0 justify-between h-10 font-normal"
+                    >
+                      <span className="truncate">
+                        {createCategoryFilter === "all" ? "All categories" : createCategoryFilter}
+                      </span>
+                      <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent
+                    className="z-[110] p-0 w-[min(100vw-2rem,var(--radix-popover-trigger-width))] max-w-[calc(100vw-2rem)]"
+                    align="start"
+                  >
+                    <Command>
+                      <CommandInput placeholder="Search categories..." />
+                      <CommandList>
+                        <CommandEmpty>No category found.</CommandEmpty>
+                        <CommandGroup>
+                          <CommandItem
+                            value="all categories"
+                            onSelect={() => {
+                              setCreateCategoryFilter("all");
+                              setCreateSubcategoryFilter("all");
+                              setCreateCategoryOpen(false);
+                            }}
+                          >
+                            <Check
+                              className={cn(
+                                "mr-2 h-4 w-4",
+                                createCategoryFilter === "all" ? "opacity-100" : "opacity-0"
+                              )}
+                            />
+                            All categories
+                          </CommandItem>
+                          {createCategories.map((category) => (
+                            <CommandItem
+                              key={category}
+                              value={category}
+                              onSelect={() => {
+                                setCreateCategoryFilter(category);
+                                setCreateSubcategoryFilter("all");
+                                setCreateCategoryOpen(false);
+                              }}
+                            >
+                              <Check
+                                className={cn(
+                                  "mr-2 h-4 w-4",
+                                  createCategoryFilter === category ? "opacity-100" : "opacity-0"
+                                )}
+                              />
+                              {category}
+                            </CommandItem>
+                          ))}
+                        </CommandGroup>
+                      </CommandList>
+                    </Command>
+                  </PopoverContent>
+                </Popover>
+
+                <Popover open={createSubcategoryOpen} onOpenChange={setCreateSubcategoryOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      role="combobox"
+                      className="w-full min-w-0 justify-between h-10 font-normal"
+                    >
+                      <span className="truncate">
+                        {createSubcategoryFilter === "all"
+                          ? "All subcategories"
+                          : createSubcategoryFilter}
+                      </span>
+                      <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent
+                    className="z-[110] p-0 w-[min(100vw-2rem,var(--radix-popover-trigger-width))] max-w-[calc(100vw-2rem)]"
+                    align="start"
+                  >
+                    <Command>
+                      <CommandInput placeholder="Search subcategories..." />
+                      <CommandList>
+                        <CommandEmpty>No subcategory found.</CommandEmpty>
+                        <CommandGroup>
+                          <CommandItem
+                            value="all subcategories"
+                            onSelect={() => {
+                              setCreateSubcategoryFilter("all");
+                              setCreateSubcategoryOpen(false);
+                            }}
+                          >
+                            <Check
+                              className={cn(
+                                "mr-2 h-4 w-4",
+                                createSubcategoryFilter === "all" ? "opacity-100" : "opacity-0"
+                              )}
+                            />
+                            All subcategories
+                          </CommandItem>
+                          {createSubcategories.map((subcategory) => (
+                            <CommandItem
+                              key={subcategory}
+                              value={subcategory}
+                              onSelect={() => {
+                                setCreateSubcategoryFilter(subcategory);
+                                setCreateSubcategoryOpen(false);
+                              }}
+                            >
+                              <Check
+                                className={cn(
+                                  "mr-2 h-4 w-4",
+                                  createSubcategoryFilter === subcategory
+                                    ? "opacity-100"
+                                    : "opacity-0"
+                                )}
+                              />
+                              {subcategory}
+                            </CommandItem>
+                          ))}
+                        </CommandGroup>
+                      </CommandList>
+                    </Command>
+                  </PopoverContent>
+                </Popover>
+                </div>
+              </div>
+
+              <div className="max-h-56 overflow-y-auto overflow-x-hidden rounded-md border divide-y overscroll-contain min-w-0">
+                {!canShowProductList ? (
+                  <p className="p-3 text-sm text-muted-foreground text-center">
+                    Pick a category or type at least 2 characters to list products
+                  </p>
+                ) : productsLoading ? (
+                  <p className="p-3 text-sm text-muted-foreground text-center">Loading products...</p>
+                ) : filteredCreateProducts.length === 0 ? (
+                  <p className="p-3 text-sm text-muted-foreground text-center">No products match</p>
+                ) : (
+                  filteredCreateProducts.map((product) => {
+                    const qty = itemQtyByProduct.get(product.id) || 0;
+                    return (
+                      <button
+                        key={product.id}
+                        type="button"
+                        onClick={() => addProductQuick(product)}
+                        className={cn(
+                          "w-full max-w-full text-left px-3 py-2.5 min-h-11 flex items-center gap-2 hover:bg-muted/80 active:bg-muted transition-colors",
+                          qty > 0 && "bg-primary/5"
+                        )}
+                      >
+                        <div className="min-w-0 flex-1 overflow-hidden">
+                          <div className="flex flex-col gap-0.5 sm:flex-row sm:items-baseline sm:gap-2">
+                            <span className="font-mono text-sm font-semibold shrink-0">
+                              {product.sku || "—"}
+                            </span>
+                            <span className="truncate text-sm">{product.name}</span>
+                          </div>
+                          <p className="text-xs text-muted-foreground truncate">
+                            {product.category}
+                            {product.subcategory ? ` · ${product.subcategory}` : ""}
+                            {` · $${Number(product.price).toFixed(2)}`}
+                          </p>
+                        </div>
+                        {qty > 0 ? (
+                          <Badge className="shrink-0">{qty}</Badge>
+                        ) : (
+                          <Plus className="h-4 w-4 shrink-0 text-muted-foreground" />
+                        )}
+                      </button>
+                    );
+                  })
+                )}
               </div>
             </div>
 
             {items.length > 0 && (
-              <div className="rounded-md border">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>Product</TableHead>
-                      <TableHead className="w-24">Qty</TableHead>
-                      <TableHead className="w-28">Price</TableHead>
-                      <TableHead className="w-28">Subtotal</TableHead>
-                      <TableHead className="w-12" />
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {items.map((item, index) => (
-                      <TableRow key={`${item.product_id}-${index}`}>
-                        <TableCell>{item.product_name}</TableCell>
-                        <TableCell>
+              <>
+                {/* Mobile line items — no horizontal scroll */}
+                <div className="md:hidden space-y-2 min-w-0">
+                  {items.map((item, index) => (
+                    <div key={`${item.product_id}-${index}`} className="rounded-md border p-3 space-y-2">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="font-mono text-sm font-semibold">{item.product_sku || "—"}</p>
+                          <p className="text-sm truncate">{item.product_name}</p>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="shrink-0 h-9 w-9 p-0"
+                          onClick={() => setItems(items.filter((_, i) => i !== index))}
+                        >
+                          <Trash2 className="h-4 w-4 text-destructive" />
+                        </Button>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="space-y-1">
+                          <Label className="text-xs">Qty</Label>
                           <Input
                             type="number"
                             min="1"
+                            inputMode="numeric"
                             value={item.quantity}
                             onChange={(e) => updateLine(index, "quantity", Number(e.target.value))}
                           />
-                        </TableCell>
-                        <TableCell>
+                        </div>
+                        <div className="space-y-1">
+                          <Label className="text-xs">Price</Label>
                           <Input
                             type="number"
                             min="0"
                             step="0.01"
+                            inputMode="decimal"
                             value={item.unit_price}
                             onChange={(e) => updateLine(index, "unit_price", Number(e.target.value))}
                           />
-                        </TableCell>
-                        <TableCell>${item.subtotal.toFixed(2)}</TableCell>
-                        <TableCell>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => setItems(items.filter((_, i) => i !== index))}
-                          >
-                            <Trash2 className="h-4 w-4 text-destructive" />
-                          </Button>
-                        </TableCell>
+                        </div>
+                      </div>
+                      <p className="text-sm text-right font-medium">
+                        Subtotal ${item.subtotal.toFixed(2)}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Desktop table */}
+                <div className="hidden md:block rounded-md border overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>SKU</TableHead>
+                        <TableHead>Flavor</TableHead>
+                        <TableHead className="w-24">Qty</TableHead>
+                        <TableHead className="w-28">Price</TableHead>
+                        <TableHead className="w-28">Subtotal</TableHead>
+                        <TableHead className="w-12" />
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
+                    </TableHeader>
+                    <TableBody>
+                      {items.map((item, index) => (
+                        <TableRow key={`${item.product_id}-${index}`}>
+                          <TableCell className="font-mono text-sm">
+                            {item.product_sku || "-"}
+                          </TableCell>
+                          <TableCell>{item.product_name}</TableCell>
+                          <TableCell>
+                            <Input
+                              type="number"
+                              min="1"
+                              inputMode="numeric"
+                              value={item.quantity}
+                              onChange={(e) => updateLine(index, "quantity", Number(e.target.value))}
+                            />
+                          </TableCell>
+                          <TableCell>
+                            <Input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              inputMode="decimal"
+                              value={item.unit_price}
+                              onChange={(e) =>
+                                updateLine(index, "unit_price", Number(e.target.value))
+                              }
+                            />
+                          </TableCell>
+                          <TableCell>${item.subtotal.toFixed(2)}</TableCell>
+                          <TableCell>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => setItems(items.filter((_, i) => i !== index))}
+                            >
+                              <Trash2 className="h-4 w-4 text-destructive" />
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              </>
             )}
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div className="space-y-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 min-w-0">
+              <div className="space-y-2 min-w-0">
                 <Label>Discount</Label>
                 <Input
                   type="number"
@@ -801,15 +1238,15 @@ const Invoices = () => {
                   onChange={(e) => setDiscountAmount(e.target.value)}
                 />
               </div>
-              <div className="space-y-2">
+              <div className="space-y-2 min-w-0">
                 <Label>Notes</Label>
                 <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} />
               </div>
             </div>
 
-            <div className="rounded-md border p-3 space-y-3">
+            <div className="rounded-md border p-3 space-y-3 min-w-0">
               <p className="text-sm font-medium">Optional payments on create</p>
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div className="space-y-2">
                   <Label>Cash</Label>
                   <Input
@@ -843,25 +1280,42 @@ const Invoices = () => {
               </div>
             </div>
 
-            <div className="flex items-center justify-between text-sm border-t pt-3">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between text-sm border-t pt-3">
               <div className="space-y-1 text-muted-foreground">
                 <div>Subtotal: ${subtotal.toFixed(2)}</div>
                 <div>Payments: ${createPaymentsTotal.toFixed(2)}</div>
               </div>
-              <div className="text-right">
+              <div className="sm:text-right">
                 <div className="text-muted-foreground">Invoice total</div>
                 <div className="text-2xl font-bold">${totalAmount.toFixed(2)}</div>
               </div>
             </div>
 
             <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 sticky bottom-0 bg-background pt-2 pb-1">
+              {(shopId || items.length > 0 || notes.trim()) && (
+                <Button
+                  type="button"
+                  variant="ghost"
+                  className="w-full sm:w-auto h-11 text-destructive"
+                  disabled={createMutation.isPending}
+                  onClick={() => {
+                    resetCreateForm({ clearDraft: true });
+                    toast({ title: "Draft discarded" });
+                  }}
+                >
+                  Discard draft
+                </Button>
+              )}
               <Button variant="outline" className="w-full sm:w-auto h-11" onClick={() => setCreateOpen(false)}>
                 Cancel
               </Button>
               <Button
                 className="w-full sm:w-auto h-11"
                 disabled={!shopId || items.length === 0 || createMutation.isPending}
-                onClick={() => createMutation.mutate()}
+                onClick={() => {
+                  if (createMutation.isPending) return;
+                  createMutation.mutate();
+                }}
               >
                 {createMutation.isPending ? "Creating..." : "Create Invoice"}
               </Button>
@@ -993,7 +1447,7 @@ const Invoices = () => {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {viewInvoice.items.map((item, idx) => (
+                      {(viewInvoice.items || []).map((item, idx) => (
                         <TableRow key={item.id || `${item.product_id}-${idx}`}>
                           <TableCell>{item.product_name}</TableCell>
                           <TableCell>{item.quantity}</TableCell>
@@ -1010,7 +1464,7 @@ const Invoices = () => {
                 <div>
                   <p className="font-medium mb-2">Payments</p>
                   <div className="space-y-1">
-                    {viewInvoice.payments.map((p) => (
+                    {(viewInvoice.payments || []).map((p) => (
                       <div key={p.id} className="flex justify-between text-muted-foreground">
                         <span>
                           {p.payment_method} · {p.payment_date}
@@ -1093,7 +1547,7 @@ const Invoices = () => {
           onRefetch={refetchInvoices}
         />
       )}
-    </DashboardLayout>
+    </>
   );
 };
 

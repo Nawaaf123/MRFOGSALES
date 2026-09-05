@@ -49,9 +49,9 @@ export const LocationTracker = () => {
         }
       },
       {
-        enableHighAccuracy: true,
-        maximumAge: 30000,
-        timeout: 27000,
+        enableHighAccuracy: false,
+        maximumAge: 60000,
+        timeout: 20000,
       }
     );
 

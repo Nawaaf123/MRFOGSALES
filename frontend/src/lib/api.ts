@@ -23,10 +23,16 @@ export async function api<T>(
   const token = getToken();
   if (token) headers.set("Authorization", `Bearer ${token}`);
 
-  const response = await fetch(`${API_URL}${path}`, {
-    ...options,
-    headers,
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${API_URL}${path}`, {
+      ...options,
+      headers,
+    });
+  } catch {
+    const error: ApiError = { message: "No network connection", status: 0 };
+    throw error;
+  }
 
   if (!response.ok) {
     let message = `Request failed (${response.status})`;

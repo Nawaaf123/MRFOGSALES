@@ -22,6 +22,7 @@ class BulkShopsRequest(BaseModel):
 
 class BulkResult(BaseModel):
     created: int
+    updated: int = 0
     geocoded: int = 0
 
 
@@ -31,11 +32,30 @@ def bulk_create_products(
     db: Session = Depends(get_db),
     _: User = Depends(require_roles(AppRole.admin, AppRole.sales)),
 ) -> BulkResult:
-    rows = [Product(**item.model_dump()) for item in payload.products]
-    db.add_all(rows)
-    db.commit()
-    return BulkResult(created=len(rows))
+    """Create products, or update existing rows when SKU already matches."""
+    created = 0
+    updated = 0
+    for item in payload.products:
+        data = item.model_dump()
+        sku = (data.get("sku") or "").strip() or None
+        data["sku"] = sku
+        if data.get("name"):
+            data["name"] = str(data["name"]).strip()
 
+        existing = None
+        if sku:
+            existing = db.query(Product).filter(Product.sku == sku).first()
+
+        if existing:
+            for key, value in data.items():
+                setattr(existing, key, value)
+            updated += 1
+        else:
+            db.add(Product(**data))
+            created += 1
+
+    db.commit()
+    return BulkResult(created=created, updated=updated)
 
 @router.post("/shops", response_model=BulkResult, status_code=status.HTTP_201_CREATED)
 def bulk_create_shops(

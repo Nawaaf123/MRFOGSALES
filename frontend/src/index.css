@@ -142,7 +142,9 @@ All colors MUST be HSL.
   [role="dialog"] {
     max-height: calc(100dvh - 1rem) !important;
     max-width: calc(100vw - 0.75rem) !important;
+    width: calc(100vw - 0.75rem) !important;
     margin: 0.35rem;
     border-radius: 0.75rem !important;
+    overflow-x: hidden !important;
   }
 }

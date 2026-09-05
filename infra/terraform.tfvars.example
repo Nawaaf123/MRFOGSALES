@@ -1,6 +1,6 @@
 # Local values — do not commit terraform.tfvars
 aws_region       = "us-east-1"
 project_name     = "mrfogsales"
-instance_type    = "t3.small"
+instance_type    = "t3.medium"
 # seed_admin_email = "you@yourdomain.com"
 # allowed_ssh_cidr = "YOUR.PUBLIC.IP/32"
