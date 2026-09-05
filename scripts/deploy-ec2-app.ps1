@@ -35,6 +35,30 @@ icacls $KeyPath /grant:r "$($env:USERNAME):(R)" | Out-Null
 $Remote = "ec2-user@${HostIp}"
 $SshArgs = @("-i", $KeyPath, "-o", "StrictHostKeyChecking=accept-new", "-o", "ConnectTimeout=20")
 
+# Optional integrations from infra/secrets.env (gitignored) or process env
+$SecretsFile = Join-Path $Infra "secrets.env"
+$ResendKey = if ($env:RESEND_API_KEY) { $env:RESEND_API_KEY } else { "" }
+$EmailFrom = if ($env:EMAIL_FROM) { $env:EMAIL_FROM } else { "Sales <onboarding@resend.dev>" }
+$MapboxToken = if ($env:VITE_MAPBOX_TOKEN) { $env:VITE_MAPBOX_TOKEN } else { "" }
+if (Test-Path $SecretsFile) {
+  Get-Content $SecretsFile | ForEach-Object {
+    $line = $_.Trim()
+    if (-not $line -or $line.StartsWith("#") -or $line -notmatch "=") { return }
+    $name, $value = $line.Split("=", 2)
+    switch ($name.Trim()) {
+      "RESEND_API_KEY" { if ($value.Trim()) { $ResendKey = $value.Trim() } }
+      "EMAIL_FROM" { if ($value.Trim()) { $EmailFrom = $value.Trim() } }
+      "VITE_MAPBOX_TOKEN" { if ($value.Trim()) { $MapboxToken = $value.Trim() } }
+      "MAPBOX_ACCESS_TOKEN" { if ($value.Trim()) { $MapboxToken = $value.Trim() } }
+    }
+  }
+}
+Write-Host "Resend:  $(if ($ResendKey) { 'configured' } else { 'MISSING' })"
+Write-Host "Mapbox:  $(if ($MapboxToken) { 'configured' } else { 'MISSING' })"
+if (-not $ResendKey -or -not $MapboxToken) {
+  Write-Host "Tip: copy infra/secrets.env.example to infra/secrets.env and fill keys, then re-run."
+}
+
 function Invoke-RemoteBash {
   param([Parameter(Mandatory = $true)][string]$Script)
   $unix = ($Script -replace "`r`n", "`n" -replace "`r", "`n")
@@ -125,8 +149,10 @@ SECRET_KEY=$AppSecret
 CORS_ORIGINS=$AppUrl
 SEED_ADMIN_EMAIL=$AdminEmail
 SEED_ADMIN_PASSWORD=$AdminPass
-RESEND_API_KEY=
-EMAIL_FROM=Sales <sales@mrfogsales.com>
+RESEND_API_KEY=$ResendKey
+EMAIL_FROM=$EmailFrom
+VITE_MAPBOX_TOKEN=$MapboxToken
+MAPBOX_ACCESS_TOKEN=$MapboxToken
 EOF
 chown ec2-user:ec2-user /opt/mrfogsales/.env
 "@
@@ -136,8 +162,7 @@ Write-Host "Building and starting containers on EC2 (first build can take 5-10 m
 $up = @'
 set -e
 cd /opt/mrfogsales
-docker compose -f docker-compose.yml --env-file .env build
-docker compose -f docker-compose.yml --env-file .env up -d
+docker compose -f docker-compose.yml --env-file .env up -d --build
 docker compose -f docker-compose.yml ps
 '@
 Invoke-RemoteBash $up

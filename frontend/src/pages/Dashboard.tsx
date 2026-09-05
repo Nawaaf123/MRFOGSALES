@@ -19,7 +19,7 @@ import { TopShops } from "@/components/dashboard/TopShops";
 import { RecentActivity } from "@/components/dashboard/RecentActivity";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { LocationTracker } from "@/components/location/LocationTracker";
-import { SalesMap } from "@/components/location/SalesMap";
+import { LocationsMap } from "@/components/location/SalesMap";
 
 type DashboardStats = {
   products_count: number;
@@ -148,10 +148,12 @@ const Dashboard = () => {
         {isAdmin && (
           <div className="space-y-3">
             <div>
-              <h2 className="text-lg font-semibold">Sales team locations</h2>
-              <p className="text-sm text-muted-foreground">Live map of salesperson positions</p>
+              <h2 className="text-lg font-semibold">Locations map</h2>
+              <p className="text-sm text-muted-foreground">
+                Shop pins and live salesperson GPS on one map
+              </p>
             </div>
-            <SalesMap />
+            <LocationsMap />
           </div>
         )}
 

@@ -23,6 +23,7 @@ import { useAuth } from "@/lib/auth";
 import { api, ApiError } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 import { BulkUploadDialog } from "@/components/shops/BulkUploadDialog";
+import { LocationsMap } from "@/components/location/SalesMap";
 import { Edit, Mail, MapPin, Phone, Plus, Snowflake, Sun, Upload } from "lucide-react";
 
 type Shop = {
@@ -36,6 +37,8 @@ type Shop = {
   city: string | null;
   state: string | null;
   zip_code: string | null;
+  latitude?: number | null;
+  longitude?: number | null;
   is_frozen: boolean;
 };
 
@@ -147,6 +150,7 @@ const Shops = () => {
     onSuccess: () => {
       queryClient.invalidateQueries({ queryKey: ["shops"] });
       queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
+      window.dispatchEvent(new Event("shops-changed"));
       setOpen(false);
       setEditing(null);
       setForm(emptyForm);
@@ -166,6 +170,7 @@ const Shops = () => {
     onSuccess: (_, vars) => {
       queryClient.invalidateQueries({ queryKey: ["shops"] });
       queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
+      window.dispatchEvent(new Event("shops-changed"));
       toast({
         title: vars.is_frozen ? "Shop frozen" : "Shop unfrozen",
         description: vars.is_frozen
@@ -175,6 +180,38 @@ const Shops = () => {
     },
     onError: (error: ApiError) => {
       toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const geocodeMutation = useMutation({
+    mutationFn: async () => {
+      let totalUpdated = 0;
+      let remaining = 1;
+      let rounds = 0;
+      while (remaining > 0 && rounds < 40) {
+        rounds += 1;
+        const result = await api<{
+          attempted: number;
+          updated: number;
+          skipped: number;
+          remaining: number;
+        }>("/shops/geocode-missing?limit=50", { method: "POST" });
+        totalUpdated += result.updated;
+        remaining = result.remaining;
+        if (result.attempted === 0) break;
+      }
+      return { updated: totalUpdated, remaining };
+    },
+    onSuccess: (result) => {
+      queryClient.invalidateQueries({ queryKey: ["shops"] });
+      window.dispatchEvent(new Event("shops-changed"));
+      toast({
+        title: "Geocode complete",
+        description: `Updated ${result.updated} shops. Remaining without coords: ${result.remaining}`,
+      });
+    },
+    onError: (error: ApiError) => {
+      toast({ title: "Geocode failed", description: error.message, variant: "destructive" });
     },
   });
 
@@ -219,10 +256,36 @@ const Shops = () => {
           className="max-w-md"
         />
 
+        <div className="space-y-2">
+          <div>
+            <h2 className="text-lg font-semibold">Shop and sales map</h2>
+            <p className="text-sm text-muted-foreground">
+              Blue pins are shops; red pins are live salesperson GPS
+            </p>
+          </div>
+          {isAdmin && (
+            <div className="flex justify-end">
+              <Button
+                variant="outline"
+                size="sm"
+                disabled={geocodeMutation.isPending}
+                onClick={() => geocodeMutation.mutate()}
+              >
+                <MapPin className="h-4 w-4 mr-2" />
+                {geocodeMutation.isPending ? "Geocoding..." : "Geocode missing shops"}
+              </Button>
+            </div>
+          )}
+          <LocationsMap heightClassName="h-[420px]" />
+        </div>
+
         <BulkUploadDialog
           open={bulkOpen}
           onOpenChange={setBulkOpen}
-          onSuccess={() => queryClient.invalidateQueries({ queryKey: ["shops"] })}
+          onSuccess={() => {
+            queryClient.invalidateQueries({ queryKey: ["shops"] });
+            window.dispatchEvent(new Event("shops-changed"));
+          }}
         />
 
         <div className="rounded-md border">

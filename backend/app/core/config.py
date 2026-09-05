@@ -17,6 +17,7 @@ class Settings(BaseSettings):
     seed_admin_name: str = "Admin"
     resend_api_key: str = ""
     email_from: str = "Sales <sales@mrfogsales.com>"
+    mapbox_access_token: str = ""
 
     @property
     def cors_origin_list(self) -> list[str]:

@@ -6,3 +6,4 @@ override.tf
 terraform.tfvars
 *.auto.tfvars
 *.pem
+secrets.env

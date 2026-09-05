@@ -27,6 +27,7 @@ services:
       SEED_ADMIN_NAME: Admin
       RESEND_API_KEY: ${RESEND_API_KEY:-}
       EMAIL_FROM: ${EMAIL_FROM:-Sales <sales@mrfogsales.com>}
+      MAPBOX_ACCESS_TOKEN: ${MAPBOX_ACCESS_TOKEN:-}
     depends_on:
       db:
         condition: service_healthy
@@ -36,6 +37,7 @@ services:
       context: ./frontend
       args:
         VITE_API_URL: /api
+        VITE_MAPBOX_TOKEN: ${VITE_MAPBOX_TOKEN:-}
     restart: unless-stopped
     ports:
       - "80:80"

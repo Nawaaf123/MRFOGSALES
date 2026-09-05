@@ -109,6 +109,8 @@ class ShopCreate(BaseModel):
     city: str | None = None
     state: str | None = None
     zip_code: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
     is_frozen: bool = False
 
 
@@ -122,6 +124,8 @@ class ShopUpdate(BaseModel):
     city: str | None = None
     state: str | None = None
     zip_code: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
     is_frozen: bool | None = None
 
 
@@ -136,6 +140,8 @@ class ShopOut(ORMModel):
     city: str | None
     state: str | None
     zip_code: str | None
+    latitude: float | None = None
+    longitude: float | None = None
     is_frozen: bool
     created_by: UUID | None
     retailer_user_id: UUID | None = None
@@ -153,6 +159,16 @@ class ShopBrief(ORMModel):
     city: str | None = None
     state: str | None = None
     zip_code: str | None = None
+    latitude: float | None = None
+    longitude: float | None = None
+
+
+class GeocodeMissingResult(BaseModel):
+    attempted: int
+    updated: int
+    skipped: int
+    remaining: int = 0
+    errors: list[str] = []
 
 
 class InvoiceItemIn(BaseModel):

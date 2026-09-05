@@ -57,6 +57,17 @@ cd infra
 terraform destroy -auto-approve
 ```
 
+## Mapbox + Resend
+
+1. Copy `infra/secrets.env.example` → `infra/secrets.env`
+2. Set:
+   - `VITE_MAPBOX_TOKEN` — from [Mapbox access tokens](https://account.mapbox.com/access-tokens/)
+   - `RESEND_API_KEY` — from [Resend API keys](https://resend.com/api-keys)
+   - `EMAIL_FROM` — use `Sales <onboarding@resend.dev>` until you verify your own domain
+3. Redeploy: `.\scripts\deploy-ec2-app.ps1`
+
+Mapbox is baked into the frontend image at build time; Resend is read by the API from `.env`.
+
 ## Hardening later
 
 - Set `allowed_ssh_cidr = "YOUR.IP/32"` in `infra/terraform.tfvars`
