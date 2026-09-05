@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -197,6 +197,11 @@ const Invoices = () => {
   }, [search]);
 
   const [createOpen, setCreateOpen] = useState(false);
+  const clientRequestIdRef = useRef(
+    typeof crypto !== "undefined" && crypto.randomUUID
+      ? crypto.randomUUID()
+      : `inv-${Date.now()}-${Math.random().toString(16).slice(2)}`,
+  );
   const [shopId, setShopId] = useState("");
   const [notes, setNotes] = useState("");
   const [discountAmount, setDiscountAmount] = useState("");
@@ -387,6 +392,10 @@ const Invoices = () => {
     (Number(cashAmount) || 0) + (Number(checkAmount) || 0) + (Number(creditAmount) || 0);
 
   const resetCreateForm = () => {
+    clientRequestIdRef.current =
+      typeof crypto !== "undefined" && crypto.randomUUID
+        ? crypto.randomUUID()
+        : `inv-${Date.now()}-${Math.random().toString(16).slice(2)}`;
     setShopId("");
     setNotes("");
     setDiscountAmount("");
@@ -458,6 +467,7 @@ const Invoices = () => {
       return api<Invoice>("/invoices", {
         method: "POST",
         body: JSON.stringify({
+          client_request_id: clientRequestIdRef.current,
           shop_id: shopId,
           items: items.map((item) => ({
             product_id: item.product_id,
@@ -1175,7 +1185,10 @@ const Invoices = () => {
               <Button
                 className="w-full sm:w-auto h-11"
                 disabled={!shopId || items.length === 0 || createMutation.isPending}
-                onClick={() => createMutation.mutate()}
+                onClick={() => {
+                  if (createMutation.isPending) return;
+                  createMutation.mutate();
+                }}
               >
                 {createMutation.isPending ? "Creating..." : "Create Invoice"}
               </Button>

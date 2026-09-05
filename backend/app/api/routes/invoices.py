@@ -189,6 +189,15 @@ def list_invoices(
     return [serialize_invoice_list_row(inv, paid_map.get(inv.id, 0.0)) for inv in invoices]
 
 
+def invoice_out_by_client_request_id(db: Session, client_request_id: str) -> InvoiceOut | None:
+    existing = db.query(Invoice).filter(Invoice.client_request_id == client_request_id).first()
+    if not existing:
+        return None
+    loaded = load_invoice(db, existing.id)
+    assert loaded is not None
+    return serialize_invoice(loaded, db)
+
+
 @router.post("/invoices", response_model=InvoiceOut, status_code=status.HTTP_201_CREATED)
 def create_invoice(
     payload: InvoiceCreate,
@@ -201,6 +210,12 @@ def create_invoice(
     if not payload.items:
         raise HTTPException(status_code=400, detail="Invoice requires at least one item")
 
+    request_id = str(payload.client_request_id) if payload.client_request_id else None
+    if request_id:
+        replay = invoice_out_by_client_request_id(db, request_id)
+        if replay is not None:
+            return replay
+
     items_total = sum(item.subtotal for item in payload.items)
     total_amount = max(items_total - payload.discount_amount, 0)
 
@@ -210,6 +225,7 @@ def create_invoice(
         try:
             invoice = Invoice(
                 invoice_number=next_invoice_number(db),
+                client_request_id=request_id,
                 shop_id=payload.shop_id,
                 created_by=current_user.id,
                 total_amount=total_amount,
@@ -273,7 +289,14 @@ def create_invoice(
         except IntegrityError as exc:
             db.rollback()
             last_error = exc
-            if "invoice_number" not in str(exc).lower() and "ix_invoices_invoice_number" not in str(exc):
+            err = str(exc).lower()
+            if request_id and (
+                "client_request_id" in err or "ix_invoices_client_request_id" in err
+            ):
+                replay = invoice_out_by_client_request_id(db, request_id)
+                if replay is not None:
+                    return replay
+            if "invoice_number" not in err and "ix_invoices_invoice_number" not in err:
                 raise HTTPException(status_code=409, detail="Could not create invoice due to a conflict") from exc
             continue
         except HTTPException:

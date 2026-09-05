@@ -140,6 +140,7 @@ class Invoice(Base):
 
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     invoice_number: Mapped[str] = mapped_column(String(50), unique=True, index=True)
+    client_request_id: Mapped[str | None] = mapped_column(String(64), nullable=True, unique=True, index=True)
     shop_id: Mapped[uuid.UUID] = mapped_column(ForeignKey("shops.id"), index=True)
     created_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     total_amount: Mapped[float] = mapped_column(Numeric(12, 2), default=0)

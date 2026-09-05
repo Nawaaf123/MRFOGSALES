@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import os
 import sys
+import uuid
 from datetime import date
 
 import httpx
@@ -88,10 +89,12 @@ def main() -> int:
     product_id = product["id"]
 
     # Invoice with payment
+    create_req_id = str(uuid.uuid4())
     r = client.post(
         f"{API}/invoices",
         headers=headers,
         json={
+            "client_request_id": create_req_id,
             "shop_id": shop_id,
             "warehouse": "A",
             "discount_amount": 2.5,
@@ -117,6 +120,30 @@ def main() -> int:
     check("create invoice", r.status_code == 201, r.text)
     invoice = r.json()
     invoice_id = invoice["id"]
+
+    # Idempotent replay with same client_request_id must not create a second invoice
+    r2 = client.post(
+        f"{API}/invoices",
+        headers=headers,
+        json={
+            "client_request_id": create_req_id,
+            "shop_id": shop_id,
+            "warehouse": "A",
+            "discount_amount": 2.5,
+            "notes": "smoke test invoice retry",
+            "items": [
+                {
+                    "product_id": product_id,
+                    "product_name": "Smoke Product",
+                    "quantity": 4,
+                    "unit_price": 12.5,
+                    "subtotal": 50.0,
+                }
+            ],
+            "payments": [],
+        },
+    )
+    check("idempotent create replay", r2.status_code == 201 and r2.json().get("id") == invoice_id, r2.text)
     check("invoice number present", bool(invoice.get("invoice_number")), str(invoice))
     check("invoice total 47.5", abs(float(invoice["total_amount"]) - 47.5) < 0.01, str(invoice.get("total_amount")))
     check("invoice partial after payment", invoice.get("payment_status") == "partial", str(invoice.get("payment_status")))

@@ -38,6 +38,9 @@ def ensure_schema() -> None:
         "CREATE UNIQUE INDEX IF NOT EXISTS ix_products_sku_unique ON products (sku) WHERE sku IS NOT NULL",
         "CREATE INDEX IF NOT EXISTS ix_invoices_payment_status ON invoices (payment_status)",
         "CREATE INDEX IF NOT EXISTS ix_invoices_created_at ON invoices (created_at DESC)",
+        "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS client_request_id VARCHAR(64)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ix_invoices_client_request_id "
+        "ON invoices (client_request_id) WHERE client_request_id IS NOT NULL",
         "CREATE INDEX IF NOT EXISTS ix_products_is_active ON products (is_active)",
         "CREATE INDEX IF NOT EXISTS ix_shops_is_frozen ON shops (is_frozen)",
     ]

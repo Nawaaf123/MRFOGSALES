@@ -10,6 +10,7 @@ from __future__ import annotations
 import os
 import sys
 import time
+import uuid
 from concurrent.futures import ThreadPoolExecutor, as_completed
 
 import httpx
@@ -114,6 +115,7 @@ def main() -> int:
         def create_invoice(acct: dict) -> dict:
             headers = {"Authorization": f"Bearer {acct['token']}"}
             body = {
+                "client_request_id": str(uuid.uuid4()),
                 "shop_id": shop["id"],
                 "items": [
                     {

@@ -206,6 +206,8 @@ class InvoiceCreate(BaseModel):
     notes: str | None = None
     warehouse: WarehouseCode | None = WarehouseCode.A
     payments: list[PaymentIn] = []
+    # Same id on retry/double-submit returns the original invoice (no duplicate).
+    client_request_id: UUID | None = None
 
 
 class InvoiceItemOut(ORMModel):
