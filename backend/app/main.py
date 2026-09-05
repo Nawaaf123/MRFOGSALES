@@ -34,6 +34,8 @@ def ensure_schema() -> None:
     statements = [
         "ALTER TABLE shops ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION",
         "ALTER TABLE shops ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION",
+        "ALTER TABLE products ADD COLUMN IF NOT EXISTS sku VARCHAR(64)",
+        "CREATE UNIQUE INDEX IF NOT EXISTS ix_products_sku_unique ON products (sku) WHERE sku IS NOT NULL",
     ]
     with engine.begin() as conn:
         for statement in statements:

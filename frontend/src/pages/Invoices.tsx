@@ -38,6 +38,15 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
 import { useAuth } from "@/lib/auth";
 import { api, ApiError } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
@@ -45,7 +54,8 @@ import { generateInvoicePDF, saveInvoicePDF } from "@/lib/pdfGenerator";
 import { CreditDialog } from "@/components/invoices/CreditDialog";
 import { DistributePaymentDialog } from "@/components/invoices/DistributePaymentDialog";
 import { ShopInvoiceGroup } from "@/components/invoices/ShopInvoiceGroup";
-import { Plus, Trash2 } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { Check, ChevronsUpDown, Plus, Trash2 } from "lucide-react";
 
 type Shop = {
   id: string;
@@ -56,9 +66,11 @@ type Shop = {
 type Product = {
   id: string;
   name: string;
+  sku?: string | null;
   price: number;
   is_active: boolean;
   category: string;
+  subcategory?: string | null;
 };
 
 type UserProfile = {
@@ -151,10 +163,15 @@ function pdfDocToBase64(doc: { output: (type: string) => string }): string {
 type LineItemDraft = {
   product_id: string;
   product_name: string;
+  product_sku?: string | null;
   quantity: number;
   unit_price: number;
   subtotal: number;
 };
+
+function skuSortKey(sku: string | null | undefined) {
+  return (sku || "").trim().toLowerCase();
+}
 
 const statusBadgeVariant = (status: PaymentStatus): "default" | "secondary" | "destructive" => {
   if (status === "paid") return "default";
@@ -180,7 +197,11 @@ const Invoices = () => {
   const [discountAmount, setDiscountAmount] = useState("");
   const [warehouse, setWarehouse] = useState<"A" | "B">(user?.assigned_warehouse || "A");
   const [items, setItems] = useState<LineItemDraft[]>([]);
-  const [productToAdd, setProductToAdd] = useState("");
+  const [productSearch, setProductSearch] = useState("");
+  const [createCategoryFilter, setCreateCategoryFilter] = useState("all");
+  const [createSubcategoryFilter, setCreateSubcategoryFilter] = useState("all");
+  const [createCategoryOpen, setCreateCategoryOpen] = useState(false);
+  const [createSubcategoryOpen, setCreateSubcategoryOpen] = useState(false);
   const [cashAmount, setCashAmount] = useState("");
   const [checkAmount, setCheckAmount] = useState("");
   const [creditAmount, setCreditAmount] = useState("");
@@ -226,6 +247,59 @@ const Invoices = () => {
     queryKey: ["products", "active"],
     queryFn: () => api<Product[]>("/products?active_only=true"),
   });
+
+  const createCategories = useMemo(() => {
+    return Array.from(new Set(products.map((p) => p.category).filter(Boolean))).sort((a, b) =>
+      a.localeCompare(b)
+    );
+  }, [products]);
+
+  const createSubcategories = useMemo(() => {
+    const pool =
+      createCategoryFilter === "all"
+        ? products
+        : products.filter((p) => p.category === createCategoryFilter);
+    return Array.from(
+      new Set(pool.map((p) => p.subcategory).filter((s): s is string => Boolean(s)))
+    ).sort((a, b) => a.localeCompare(b));
+  }, [products, createCategoryFilter]);
+
+  const filteredCreateProducts = useMemo(() => {
+    const q = productSearch.trim().toLowerCase();
+    const rows = products.filter((p) => {
+      if (createCategoryFilter !== "all" && p.category !== createCategoryFilter) return false;
+      if (
+        createSubcategoryFilter !== "all" &&
+        (p.subcategory || "") !== createSubcategoryFilter
+      ) {
+        return false;
+      }
+      if (!q) return true;
+      return (
+        p.name.toLowerCase().includes(q) ||
+        (p.sku || "").toLowerCase().includes(q) ||
+        p.category.toLowerCase().includes(q) ||
+        (p.subcategory || "").toLowerCase().includes(q)
+      );
+    });
+    return [...rows].sort((a, b) => {
+      const sa = skuSortKey(a.sku);
+      const sb = skuSortKey(b.sku);
+      if (!sa && !sb) return a.name.localeCompare(b.name);
+      if (!sa) return 1;
+      if (!sb) return -1;
+      const cmp = sa.localeCompare(sb, undefined, { numeric: true, sensitivity: "base" });
+      return cmp !== 0 ? cmp : a.name.localeCompare(b.name);
+    });
+  }, [products, productSearch, createCategoryFilter, createSubcategoryFilter]);
+
+  const itemQtyByProduct = useMemo(() => {
+    const map = new Map<string, number>();
+    for (const item of items) {
+      map.set(item.product_id, (map.get(item.product_id) || 0) + item.quantity);
+    }
+    return map;
+  }, [items]);
 
   const { data: profiles = [] } = useQuery({
     queryKey: ["users", "profiles-for-invoices"],
@@ -302,38 +376,40 @@ const Invoices = () => {
     setDiscountAmount("");
     setWarehouse(user?.assigned_warehouse || "A");
     setItems([]);
-    setProductToAdd("");
+    setProductSearch("");
+    setCreateCategoryFilter("all");
+    setCreateSubcategoryFilter("all");
     setCashAmount("");
     setCheckAmount("");
     setCreditAmount("");
   };
 
-  const addProductLine = () => {
-    const product = products.find((p) => p.id === productToAdd);
-    if (!product) return;
-    const existing = items.findIndex((i) => i.product_id === product.id);
-    if (existing >= 0) {
-      const next = [...items];
-      next[existing] = {
-        ...next[existing],
-        quantity: next[existing].quantity + 1,
-        subtotal: (next[existing].quantity + 1) * next[existing].unit_price,
-      };
-      setItems(next);
-    } else {
+  const addProductQuick = (product: Product) => {
+    setItems((prev) => {
+      const existing = prev.findIndex((i) => i.product_id === product.id);
+      if (existing >= 0) {
+        const next = [...prev];
+        const qty = next[existing].quantity + 1;
+        next[existing] = {
+          ...next[existing],
+          quantity: qty,
+          subtotal: qty * next[existing].unit_price,
+        };
+        return next;
+      }
       const price = Number(product.price) || 0;
-      setItems([
-        ...items,
+      return [
+        ...prev,
         {
           product_id: product.id,
           product_name: product.name,
+          product_sku: product.sku || null,
           quantity: 1,
           unit_price: price,
           subtotal: price,
         },
-      ]);
-    }
-    setProductToAdd("");
+      ];
+    });
   };
 
   const updateLine = (index: number, field: "quantity" | "unit_price", value: number) => {
@@ -701,42 +777,183 @@ const Invoices = () => {
               </div>
             </div>
 
-            <div className="space-y-2">
-              <Label>Add product</Label>
-              <div className="flex gap-2">
-                <Select
-                  value={productToAdd}
-                  onValueChange={setProductToAdd}
-                  disabled={productsLoading || products.length === 0}
-                >
-                  <SelectTrigger className="flex-1">
-                    <SelectValue
-                      placeholder={
-                        productsLoading
-                          ? "Loading products..."
-                          : products.length === 0
-                            ? "No products available"
-                            : "Select product"
-                      }
-                    />
-                  </SelectTrigger>
-                  <SelectContent className="z-[100] max-h-[min(24rem,50vh)]">
-                    {products.map((product) => (
-                      <SelectItem key={product.id} value={product.id}>
-                        {product.name} — ${Number(product.price).toFixed(2)}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Button
-                  type="button"
-                  variant="outline"
-                  className="shrink-0 h-10"
-                  onClick={addProductLine}
-                  disabled={!productToAdd}
-                >
-                  Add
-                </Button>
+            <div className="space-y-3 rounded-md border p-3">
+              <div className="flex items-center justify-between gap-2">
+                <Label className="text-base">Products</Label>
+                <span className="text-xs text-muted-foreground">Tap to add · adjust qty below</span>
+              </div>
+
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+                <Input
+                  placeholder="Search SKU or flavor..."
+                  value={productSearch}
+                  onChange={(e) => setProductSearch(e.target.value)}
+                  className="sm:col-span-1"
+                />
+
+                <Popover open={createCategoryOpen} onOpenChange={setCreateCategoryOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      role="combobox"
+                      className="w-full justify-between h-10 font-normal"
+                    >
+                      <span className="truncate">
+                        {createCategoryFilter === "all" ? "All categories" : createCategoryFilter}
+                      </span>
+                      <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-[var(--radix-popover-trigger-width)] z-[110] p-0" align="start">
+                    <Command>
+                      <CommandInput placeholder="Search categories..." />
+                      <CommandList>
+                        <CommandEmpty>No category found.</CommandEmpty>
+                        <CommandGroup>
+                          <CommandItem
+                            value="all categories"
+                            onSelect={() => {
+                              setCreateCategoryFilter("all");
+                              setCreateSubcategoryFilter("all");
+                              setCreateCategoryOpen(false);
+                            }}
+                          >
+                            <Check
+                              className={cn(
+                                "mr-2 h-4 w-4",
+                                createCategoryFilter === "all" ? "opacity-100" : "opacity-0"
+                              )}
+                            />
+                            All categories
+                          </CommandItem>
+                          {createCategories.map((category) => (
+                            <CommandItem
+                              key={category}
+                              value={category}
+                              onSelect={() => {
+                                setCreateCategoryFilter(category);
+                                setCreateSubcategoryFilter("all");
+                                setCreateCategoryOpen(false);
+                              }}
+                            >
+                              <Check
+                                className={cn(
+                                  "mr-2 h-4 w-4",
+                                  createCategoryFilter === category ? "opacity-100" : "opacity-0"
+                                )}
+                              />
+                              {category}
+                            </CommandItem>
+                          ))}
+                        </CommandGroup>
+                      </CommandList>
+                    </Command>
+                  </PopoverContent>
+                </Popover>
+
+                <Popover open={createSubcategoryOpen} onOpenChange={setCreateSubcategoryOpen}>
+                  <PopoverTrigger asChild>
+                    <Button
+                      variant="outline"
+                      role="combobox"
+                      className="w-full justify-between h-10 font-normal"
+                    >
+                      <span className="truncate">
+                        {createSubcategoryFilter === "all"
+                          ? "All subcategories"
+                          : createSubcategoryFilter}
+                      </span>
+                      <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                    </Button>
+                  </PopoverTrigger>
+                  <PopoverContent className="w-[var(--radix-popover-trigger-width)] z-[110] p-0" align="start">
+                    <Command>
+                      <CommandInput placeholder="Search subcategories..." />
+                      <CommandList>
+                        <CommandEmpty>No subcategory found.</CommandEmpty>
+                        <CommandGroup>
+                          <CommandItem
+                            value="all subcategories"
+                            onSelect={() => {
+                              setCreateSubcategoryFilter("all");
+                              setCreateSubcategoryOpen(false);
+                            }}
+                          >
+                            <Check
+                              className={cn(
+                                "mr-2 h-4 w-4",
+                                createSubcategoryFilter === "all" ? "opacity-100" : "opacity-0"
+                              )}
+                            />
+                            All subcategories
+                          </CommandItem>
+                          {createSubcategories.map((subcategory) => (
+                            <CommandItem
+                              key={subcategory}
+                              value={subcategory}
+                              onSelect={() => {
+                                setCreateSubcategoryFilter(subcategory);
+                                setCreateSubcategoryOpen(false);
+                              }}
+                            >
+                              <Check
+                                className={cn(
+                                  "mr-2 h-4 w-4",
+                                  createSubcategoryFilter === subcategory
+                                    ? "opacity-100"
+                                    : "opacity-0"
+                                )}
+                              />
+                              {subcategory}
+                            </CommandItem>
+                          ))}
+                        </CommandGroup>
+                      </CommandList>
+                    </Command>
+                  </PopoverContent>
+                </Popover>
+              </div>
+
+              <div className="max-h-56 overflow-y-auto rounded-md border divide-y overscroll-contain">
+                {productsLoading ? (
+                  <p className="p-3 text-sm text-muted-foreground text-center">Loading products...</p>
+                ) : filteredCreateProducts.length === 0 ? (
+                  <p className="p-3 text-sm text-muted-foreground text-center">No products match</p>
+                ) : (
+                  filteredCreateProducts.map((product) => {
+                    const qty = itemQtyByProduct.get(product.id) || 0;
+                    return (
+                      <button
+                        key={product.id}
+                        type="button"
+                        onClick={() => addProductQuick(product)}
+                        className={cn(
+                          "w-full text-left px-3 py-2.5 min-h-11 flex items-center gap-3 hover:bg-muted/80 active:bg-muted transition-colors",
+                          qty > 0 && "bg-primary/5"
+                        )}
+                      >
+                        <div className="min-w-0 flex-1">
+                          <div className="flex items-baseline gap-2">
+                            <span className="font-mono text-sm font-semibold shrink-0">
+                              {product.sku || "—"}
+                            </span>
+                            <span className="truncate text-sm">{product.name}</span>
+                          </div>
+                          <p className="text-xs text-muted-foreground truncate">
+                            {product.category}
+                            {product.subcategory ? ` · ${product.subcategory}` : ""}
+                            {` · $${Number(product.price).toFixed(2)}`}
+                          </p>
+                        </div>
+                        {qty > 0 ? (
+                          <Badge className="shrink-0">{qty}</Badge>
+                        ) : (
+                          <Plus className="h-4 w-4 shrink-0 text-muted-foreground" />
+                        )}
+                      </button>
+                    );
+                  })
+                )}
               </div>
             </div>
 
@@ -745,7 +962,8 @@ const Invoices = () => {
                 <Table>
                   <TableHeader>
                     <TableRow>
-                      <TableHead>Product</TableHead>
+                      <TableHead>SKU</TableHead>
+                      <TableHead>Flavor</TableHead>
                       <TableHead className="w-24">Qty</TableHead>
                       <TableHead className="w-28">Price</TableHead>
                       <TableHead className="w-28">Subtotal</TableHead>
@@ -755,11 +973,15 @@ const Invoices = () => {
                   <TableBody>
                     {items.map((item, index) => (
                       <TableRow key={`${item.product_id}-${index}`}>
+                        <TableCell className="font-mono text-sm">
+                          {item.product_sku || "-"}
+                        </TableCell>
                         <TableCell>{item.product_name}</TableCell>
                         <TableCell>
                           <Input
                             type="number"
                             min="1"
+                            inputMode="numeric"
                             value={item.quantity}
                             onChange={(e) => updateLine(index, "quantity", Number(e.target.value))}
                           />
@@ -769,6 +991,7 @@ const Invoices = () => {
                             type="number"
                             min="0"
                             step="0.01"
+                            inputMode="decimal"
                             value={item.unit_price}
                             onChange={(e) => updateLine(index, "unit_price", Number(e.target.value))}
                           />

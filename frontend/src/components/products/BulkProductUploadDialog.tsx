@@ -16,8 +16,10 @@ import * as XLSX from "xlsx";
 
 type ProductCreateRow = {
   name: string;
+  sku: string | null;
   price: number;
   stock_quantity: number;
+  low_stock_threshold: number;
   category: string;
   subcategory: string | null;
   sub_subcategory: string | null;
@@ -27,6 +29,15 @@ interface BulkProductUploadDialogProps {
   categoryFilter?: string;
   subcategoryFilter?: string;
   subSubcategoryFilter?: string;
+}
+
+function cell(row: Record<string, unknown>, ...keys: string[]): string {
+  for (const key of keys) {
+    if (row[key] != null && String(row[key]).trim() !== "") {
+      return String(row[key]).trim();
+    }
+  }
+  return "";
 }
 
 export const BulkProductUploadDialog = ({
@@ -43,8 +54,10 @@ export const BulkProductUploadDialog = ({
     const ws = XLSX.utils.json_to_sheet([
       {
         "Product Name": "Example Product",
+        SKU: "EX01-US",
         Price: 9.99,
         Stock: 100,
+        "Min Stock": 10,
         Category: categoryFilter !== "all" ? categoryFilter : "General",
         Subcategory: subcategoryFilter !== "all" ? subcategoryFilter : "",
         "Sub-subcategory": subSubcategoryFilter !== "all" ? subSubcategoryFilter : "",
@@ -52,8 +65,10 @@ export const BulkProductUploadDialog = ({
     ]);
     ws["!cols"] = [
       { wch: 30 },
+      { wch: 14 },
       { wch: 10 },
       { wch: 10 },
+      { wch: 12 },
       { wch: 20 },
       { wch: 20 },
       { wch: 20 },
@@ -65,14 +80,18 @@ export const BulkProductUploadDialog = ({
 
   const mutation = useMutation({
     mutationFn: (products: ProductCreateRow[]) =>
-      api<{ created: number }>("/bulk/products", {
+      api<{ created: number; updated?: number }>("/bulk/products", {
         method: "POST",
         body: JSON.stringify({ products }),
       }),
     onSuccess: (result) => {
+      const updated = result.updated ?? 0;
       toast({
         title: "Products imported",
-        description: `${result.created} products have been added successfully`,
+        description:
+          updated > 0
+            ? `Created ${result.created}, updated ${updated}`
+            : `${result.created} products have been added successfully`,
       });
       setFile(null);
       setIsOpen(false);
@@ -104,29 +123,34 @@ export const BulkProductUploadDialog = ({
         const jsonData = XLSX.utils.sheet_to_json(worksheet) as Record<string, unknown>[];
 
         const products = jsonData
-          .map((row) => ({
-            name: String(row["Product Name"] ?? "").trim(),
-            price: parseFloat(String(row["Price"] ?? 0)) || 0,
-            stock_quantity: parseInt(String(row["Stock"] ?? 0), 10) || 0,
-            category:
-              String(row["Category"] ?? "").trim() ||
-              (categoryFilter !== "all" ? categoryFilter : "General"),
-            subcategory:
-              String(row["Subcategory"] ?? "").trim() ||
-              (subcategoryFilter !== "all" ? subcategoryFilter : "") ||
-              null,
-            sub_subcategory:
-              String(row["Sub-subcategory"] ?? "").trim() ||
-              (subSubcategoryFilter !== "all" ? subSubcategoryFilter : "") ||
-              null,
-          }))
-          .filter((product) => product.name && product.price > 0);
+          .map((row) => {
+            const minStockRaw = cell(row, "Min Stock", "Low Stock", "low_stock_threshold");
+            const stockRaw = cell(row, "Stock", "Stock A", "stock_quantity");
+            return {
+              name: cell(row, "Product Name", "Name", "name"),
+              sku: cell(row, "SKU", "Sku", "sku") || null,
+              price: parseFloat(cell(row, "Price", "price") || "0") || 0,
+              stock_quantity: parseInt(stockRaw || "0", 10) || 0,
+              low_stock_threshold: parseInt(minStockRaw || "10", 10) || 0,
+              category:
+                cell(row, "Category", "category") ||
+                (categoryFilter !== "all" ? categoryFilter : "General"),
+              subcategory:
+                cell(row, "Subcategory", "subcategory") ||
+                (subcategoryFilter !== "all" ? subcategoryFilter : "") ||
+                null,
+              sub_subcategory:
+                cell(row, "Sub-subcategory", "sub_subcategory") ||
+                (subSubcategoryFilter !== "all" ? subSubcategoryFilter : "") ||
+                null,
+            };
+          })
+          .filter((product) => product.name);
 
         if (products.length === 0) {
           toast({
             title: "No valid products",
-            description:
-              "The file contains no valid products. Ensure each row has a name and price > 0.",
+            description: "The file contains no valid products. Ensure each row has a product name.",
             variant: "destructive",
           });
           return;
@@ -159,7 +183,8 @@ export const BulkProductUploadDialog = ({
         <div className="space-y-4">
           <div className="p-4 bg-muted rounded-lg space-y-2">
             <p className="text-sm text-muted-foreground">
-              Download the template, fill in your products, and upload it back.
+              Download the template, fill in your products, and upload it back. Matching SKUs
+              update existing products.
             </p>
             <Button variant="outline" size="sm" onClick={downloadTemplate}>
               <Download className="h-4 w-4 mr-2" />

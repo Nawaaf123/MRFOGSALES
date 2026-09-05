@@ -12,13 +12,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog";
 import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
   Table,
   TableBody,
   TableCell,
@@ -36,15 +29,26 @@ import {
   AlertDialogHeader,
   AlertDialogTitle,
 } from "@/components/ui/alert-dialog";
+import { Popover, PopoverContent, PopoverTrigger } from "@/components/ui/popover";
+import {
+  Command,
+  CommandEmpty,
+  CommandGroup,
+  CommandInput,
+  CommandItem,
+  CommandList,
+} from "@/components/ui/command";
 import { useAuth } from "@/lib/auth";
 import { api, ApiError } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 import { BulkProductUploadDialog } from "@/components/products/BulkProductUploadDialog";
-import { Edit, Plus, Power } from "lucide-react";
+import { cn } from "@/lib/utils";
+import { ArrowDownAZ, ArrowUpAZ, Check, ChevronsUpDown, Edit, Plus, Power } from "lucide-react";
 
 type Product = {
   id: string;
   name: string;
+  sku: string | null;
   category: string;
   subcategory: string | null;
   sub_subcategory: string | null;
@@ -58,6 +62,7 @@ type Product = {
 
 type ProductFormState = {
   name: string;
+  sku: string;
   category: string;
   subcategory: string;
   sub_subcategory: string;
@@ -69,6 +74,7 @@ type ProductFormState = {
 
 const emptyForm: ProductFormState = {
   name: "",
+  sku: "",
   category: "General",
   subcategory: "",
   sub_subcategory: "",
@@ -81,6 +87,7 @@ const emptyForm: ProductFormState = {
 function toForm(product: Product): ProductFormState {
   return {
     name: product.name,
+    sku: product.sku || "",
     category: product.category || "General",
     subcategory: product.subcategory || "",
     sub_subcategory: product.sub_subcategory || "",
@@ -94,6 +101,7 @@ function toForm(product: Product): ProductFormState {
 function formPayload(form: ProductFormState) {
   return {
     name: form.name.trim(),
+    sku: form.sku.trim() || null,
     category: form.category.trim() || "General",
     subcategory: form.subcategory.trim() || null,
     sub_subcategory: form.sub_subcategory.trim() || null,
@@ -102,6 +110,10 @@ function formPayload(form: ProductFormState) {
     stock_quantity_b: Number(form.stock_quantity_b) || 0,
     low_stock_threshold: Number(form.low_stock_threshold) || 0,
   };
+}
+
+function skuSortKey(sku: string | null | undefined) {
+  return (sku || "").trim().toLowerCase();
 }
 
 const Products = () => {
@@ -113,6 +125,10 @@ const Products = () => {
 
   const [search, setSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
+  const [subcategoryFilter, setSubcategoryFilter] = useState("all");
+  const [skuSortAsc, setSkuSortAsc] = useState(true);
+  const [categoryOpen, setCategoryOpen] = useState(false);
+  const [subcategoryOpen, setSubcategoryOpen] = useState(false);
   const [open, setOpen] = useState(false);
   const [editing, setEditing] = useState<Product | null>(null);
   const [form, setForm] = useState<ProductFormState>(emptyForm);
@@ -124,22 +140,48 @@ const Products = () => {
   });
 
   const categories = useMemo(() => {
-    return Array.from(new Set(products.map((p) => p.category).filter(Boolean))).sort();
+    return Array.from(new Set(products.map((p) => p.category).filter(Boolean))).sort((a, b) =>
+      a.localeCompare(b)
+    );
   }, [products]);
+
+  const subcategories = useMemo(() => {
+    const pool =
+      categoryFilter === "all"
+        ? products
+        : products.filter((p) => p.category === categoryFilter);
+    return Array.from(
+      new Set(pool.map((p) => p.subcategory).filter((s): s is string => Boolean(s)))
+    ).sort((a, b) => a.localeCompare(b));
+  }, [products, categoryFilter]);
 
   const filtered = useMemo(() => {
     const q = search.trim().toLowerCase();
-    return products.filter((p) => {
+    const rows = products.filter((p) => {
       if (categoryFilter !== "all" && p.category !== categoryFilter) return false;
+      if (subcategoryFilter !== "all" && (p.subcategory || "") !== subcategoryFilter) return false;
       if (!q) return true;
       return (
         p.name.toLowerCase().includes(q) ||
+        (p.sku || "").toLowerCase().includes(q) ||
         p.category.toLowerCase().includes(q) ||
         (p.subcategory || "").toLowerCase().includes(q) ||
         (p.sub_subcategory || "").toLowerCase().includes(q)
       );
     });
-  }, [products, search, categoryFilter]);
+
+    const dir = skuSortAsc ? 1 : -1;
+    return [...rows].sort((a, b) => {
+      const sa = skuSortKey(a.sku);
+      const sb = skuSortKey(b.sku);
+      if (!sa && !sb) return a.name.localeCompare(b.name) * dir;
+      if (!sa) return 1;
+      if (!sb) return -1;
+      const cmp = sa.localeCompare(sb, undefined, { numeric: true, sensitivity: "base" });
+      if (cmp !== 0) return cmp * dir;
+      return a.name.localeCompare(b.name) * dir;
+    });
+  }, [products, search, categoryFilter, subcategoryFilter, skuSortAsc]);
 
   const saveMutation = useMutation({
     mutationFn: () => {
@@ -210,6 +252,17 @@ const Products = () => {
     setOpen(true);
   };
 
+  const onCategoryFilterChange = (value: string) => {
+    setCategoryFilter(value);
+    setSubcategoryFilter("all");
+    setCategoryOpen(false);
+  };
+
+  const onSubcategoryFilterChange = (value: string) => {
+    setSubcategoryFilter(value);
+    setSubcategoryOpen(false);
+  };
+
   return (
     <DashboardLayout>
       <div className="space-y-4">
@@ -220,7 +273,10 @@ const Products = () => {
           </div>
           {canManage && (
             <div className="flex flex-col sm:flex-row flex-wrap gap-2 w-full sm:w-auto">
-              <BulkProductUploadDialog categoryFilter={categoryFilter} />
+              <BulkProductUploadDialog
+                categoryFilter={categoryFilter}
+                subcategoryFilter={subcategoryFilter}
+              />
               <Button className="w-full sm:w-auto h-11" onClick={openCreate}>
                 <Plus className="h-4 w-4 mr-2" />
                 Add Product
@@ -229,33 +285,150 @@ const Products = () => {
           )}
         </div>
 
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-end">
-          <div className="flex-1 space-y-2">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-[1fr_minmax(12rem,16rem)_minmax(12rem,16rem)_auto] gap-3 items-end">
+          <div className="space-y-2">
             <Label htmlFor="product-search">Search</Label>
             <Input
               id="product-search"
-              placeholder="Search by name or category..."
+              placeholder="Search by name, SKU, or category..."
               value={search}
               onChange={(e) => setSearch(e.target.value)}
             />
           </div>
-          <div className="w-full sm:w-56 space-y-2">
+
+          <div className="space-y-2">
             <Label>Category</Label>
-            <Select value={categoryFilter} onValueChange={setCategoryFilter}>
-              <SelectTrigger className="h-11">
-                <SelectValue placeholder="All categories" />
-              </SelectTrigger>
-              <SelectContent>
-                <SelectItem value="all">All categories</SelectItem>
-                {categories.map((category) => (
-                  <SelectItem key={category} value={category}>
-                    {category}
-                  </SelectItem>
-                ))}
-              </SelectContent>
-            </Select>
+            <Popover open={categoryOpen} onOpenChange={setCategoryOpen}>
+              <PopoverTrigger asChild>
+                <Button
+                  variant="outline"
+                  role="combobox"
+                  aria-expanded={categoryOpen}
+                  className="w-full justify-between h-11 font-normal"
+                >
+                  <span className="truncate">
+                    {categoryFilter === "all" ? "All categories" : categoryFilter}
+                  </span>
+                  <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
+                <Command>
+                  <CommandInput placeholder="Search categories..." />
+                  <CommandList>
+                    <CommandEmpty>No category found.</CommandEmpty>
+                    <CommandGroup>
+                      <CommandItem value="all categories" onSelect={() => onCategoryFilterChange("all")}>
+                        <Check
+                          className={cn(
+                            "mr-2 h-4 w-4",
+                            categoryFilter === "all" ? "opacity-100" : "opacity-0"
+                          )}
+                        />
+                        All categories
+                      </CommandItem>
+                      {categories.map((category) => (
+                        <CommandItem
+                          key={category}
+                          value={category}
+                          onSelect={() => onCategoryFilterChange(category)}
+                        >
+                          <Check
+                            className={cn(
+                              "mr-2 h-4 w-4",
+                              categoryFilter === category ? "opacity-100" : "opacity-0"
+                            )}
+                          />
+                          {category}
+                        </CommandItem>
+                      ))}
+                    </CommandGroup>
+                  </CommandList>
+                </Command>
+              </PopoverContent>
+            </Popover>
           </div>
+
+          <div className="space-y-2">
+            <Label>Subcategory</Label>
+            <Popover open={subcategoryOpen} onOpenChange={setSubcategoryOpen}>
+              <PopoverTrigger asChild>
+                <Button
+                  variant="outline"
+                  role="combobox"
+                  aria-expanded={subcategoryOpen}
+                  className="w-full justify-between h-11 font-normal"
+                >
+                  <span className="truncate">
+                    {subcategoryFilter === "all" ? "All subcategories" : subcategoryFilter}
+                  </span>
+                  <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                </Button>
+              </PopoverTrigger>
+              <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
+                <Command>
+                  <CommandInput placeholder="Search subcategories..." />
+                  <CommandList>
+                    <CommandEmpty>No subcategory found.</CommandEmpty>
+                    <CommandGroup>
+                      <CommandItem
+                        value="all subcategories"
+                        onSelect={() => onSubcategoryFilterChange("all")}
+                      >
+                        <Check
+                          className={cn(
+                            "mr-2 h-4 w-4",
+                            subcategoryFilter === "all" ? "opacity-100" : "opacity-0"
+                          )}
+                        />
+                        All subcategories
+                      </CommandItem>
+                      {subcategories.map((subcategory) => (
+                        <CommandItem
+                          key={subcategory}
+                          value={subcategory}
+                          onSelect={() => onSubcategoryFilterChange(subcategory)}
+                        >
+                          <Check
+                            className={cn(
+                              "mr-2 h-4 w-4",
+                              subcategoryFilter === subcategory ? "opacity-100" : "opacity-0"
+                            )}
+                          />
+                          {subcategory}
+                        </CommandItem>
+                      ))}
+                    </CommandGroup>
+                  </CommandList>
+                </Command>
+              </PopoverContent>
+            </Popover>
+          </div>
+
+          <Button
+            type="button"
+            variant="outline"
+            className="h-11 w-full lg:w-auto"
+            onClick={() => setSkuSortAsc((v) => !v)}
+            title={
+              skuSortAsc
+                ? "SKU ascending (A→Z). Click for descending."
+                : "SKU descending (Z→A). Click for ascending."
+            }
+          >
+            {skuSortAsc ? (
+              <ArrowDownAZ className="h-4 w-4 mr-2" />
+            ) : (
+              <ArrowUpAZ className="h-4 w-4 mr-2" />
+            )}
+            SKU {skuSortAsc ? "A→Z" : "Z→A"}
+          </Button>
         </div>
+
+        <p className="text-xs text-muted-foreground">
+          Showing {filtered.length} product{filtered.length === 1 ? "" : "s"}, sorted by SKU{" "}
+          {skuSortAsc ? "ascending" : "descending"}
+        </p>
 
         {/* Mobile cards */}
         <div className="md:hidden space-y-3">
@@ -274,7 +447,8 @@ const Products = () => {
                 >
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
-                      <p className="font-semibold leading-snug">{product.name}</p>
+                      <p className="font-mono text-sm font-semibold">{product.sku || "—"}</p>
+                      <p className="font-medium leading-snug">{product.name}</p>
                       <p className="text-sm text-muted-foreground">
                         {product.category}
                         {product.subcategory ? ` · ${product.subcategory}` : ""}
@@ -348,7 +522,8 @@ const Products = () => {
           <Table>
             <TableHeader>
               <TableRow>
-                <TableHead>Name</TableHead>
+                <TableHead>SKU</TableHead>
+                <TableHead>Flavor</TableHead>
                 <TableHead>Category</TableHead>
                 <TableHead>Subcategory</TableHead>
                 <TableHead>Price</TableHead>
@@ -361,11 +536,11 @@ const Products = () => {
             <TableBody>
               {isLoading ? (
                 <TableRow>
-                  <TableCell colSpan={canManage ? 8 : 7}>Loading...</TableCell>
+                  <TableCell colSpan={canManage ? 9 : 8}>Loading...</TableCell>
                 </TableRow>
               ) : filtered.length === 0 ? (
                 <TableRow>
-                  <TableCell colSpan={canManage ? 8 : 7}>No products found</TableCell>
+                  <TableCell colSpan={canManage ? 9 : 8}>No products found</TableCell>
                 </TableRow>
               ) : (
                 filtered.map((product) => {
@@ -373,7 +548,10 @@ const Products = () => {
                     product.stock_quantity + product.stock_quantity_b <= product.low_stock_threshold;
                   return (
                     <TableRow key={product.id} className={!product.is_active ? "opacity-60" : undefined}>
-                      <TableCell className="font-medium">{product.name}</TableCell>
+                      <TableCell className="font-mono text-sm font-medium">
+                        {product.sku || "-"}
+                      </TableCell>
+                      <TableCell>{product.name}</TableCell>
                       <TableCell>{product.category}</TableCell>
                       <TableCell className="text-muted-foreground">
                         {product.subcategory || "-"}
@@ -463,6 +641,14 @@ const Products = () => {
                 value={form.name}
                 onChange={(e) => setForm({ ...form, name: e.target.value })}
                 placeholder="Product name"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label>SKU</Label>
+              <Input
+                value={form.sku}
+                onChange={(e) => setForm({ ...form, sku: e.target.value })}
+                placeholder="e.g. AU01-US"
               />
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
