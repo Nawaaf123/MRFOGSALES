@@ -738,16 +738,16 @@ const Invoices = () => {
           if (!next) resetCreateForm();
         }}
       >
-        <DialogContent className="max-w-2xl max-h-[90vh] overflow-y-auto">
+        <DialogContent className="max-w-2xl w-[calc(100vw-1rem)] sm:w-full max-h-[90dvh] overflow-x-hidden overflow-y-auto p-3 sm:p-6">
           <DialogHeader>
             <DialogTitle>Create Invoice</DialogTitle>
           </DialogHeader>
-          <div className="space-y-4">
+          <div className="space-y-4 min-w-0 overflow-x-hidden">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div className="space-y-2">
+              <div className="space-y-2 min-w-0">
                 <Label>Shop *</Label>
                 <Select value={shopId} onValueChange={setShopId}>
-                  <SelectTrigger>
+                  <SelectTrigger className="w-full">
                     <SelectValue placeholder="Select shop" />
                   </SelectTrigger>
                   <SelectContent>
@@ -759,14 +759,14 @@ const Invoices = () => {
                   </SelectContent>
                 </Select>
               </div>
-              <div className="space-y-2">
+              <div className="space-y-2 min-w-0">
                 <Label>Warehouse</Label>
                 <Select
                   value={warehouse}
                   onValueChange={(v) => setWarehouse(v as "A" | "B")}
                   disabled={!canPickWarehouse}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger className="w-full">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -777,26 +777,27 @@ const Invoices = () => {
               </div>
             </div>
 
-            <div className="space-y-3 rounded-md border p-3">
-              <div className="flex items-center justify-between gap-2">
+            <div className="space-y-3 rounded-md border p-3 min-w-0">
+              <div className="flex flex-col gap-0.5">
                 <Label className="text-base">Products</Label>
-                <span className="text-xs text-muted-foreground">Tap to add · adjust qty below</span>
+                <span className="text-xs text-muted-foreground">Tap a product to add · change qty below</span>
               </div>
 
-              <div className="grid grid-cols-1 sm:grid-cols-3 gap-2">
+              <div className="grid grid-cols-1 gap-2 min-w-0">
                 <Input
                   placeholder="Search SKU or flavor..."
                   value={productSearch}
                   onChange={(e) => setProductSearch(e.target.value)}
-                  className="sm:col-span-1"
+                  className="w-full min-w-0"
                 />
 
+                <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 min-w-0">
                 <Popover open={createCategoryOpen} onOpenChange={setCreateCategoryOpen}>
                   <PopoverTrigger asChild>
                     <Button
                       variant="outline"
                       role="combobox"
-                      className="w-full justify-between h-10 font-normal"
+                      className="w-full min-w-0 justify-between h-10 font-normal"
                     >
                       <span className="truncate">
                         {createCategoryFilter === "all" ? "All categories" : createCategoryFilter}
@@ -804,7 +805,10 @@ const Invoices = () => {
                       <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                     </Button>
                   </PopoverTrigger>
-                  <PopoverContent className="w-[var(--radix-popover-trigger-width)] z-[110] p-0" align="start">
+                  <PopoverContent
+                    className="z-[110] p-0 w-[min(100vw-2rem,var(--radix-popover-trigger-width))] max-w-[calc(100vw-2rem)]"
+                    align="start"
+                  >
                     <Command>
                       <CommandInput placeholder="Search categories..." />
                       <CommandList>
@@ -856,7 +860,7 @@ const Invoices = () => {
                     <Button
                       variant="outline"
                       role="combobox"
-                      className="w-full justify-between h-10 font-normal"
+                      className="w-full min-w-0 justify-between h-10 font-normal"
                     >
                       <span className="truncate">
                         {createSubcategoryFilter === "all"
@@ -866,7 +870,10 @@ const Invoices = () => {
                       <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
                     </Button>
                   </PopoverTrigger>
-                  <PopoverContent className="w-[var(--radix-popover-trigger-width)] z-[110] p-0" align="start">
+                  <PopoverContent
+                    className="z-[110] p-0 w-[min(100vw-2rem,var(--radix-popover-trigger-width))] max-w-[calc(100vw-2rem)]"
+                    align="start"
+                  >
                     <Command>
                       <CommandInput placeholder="Search subcategories..." />
                       <CommandList>
@@ -912,9 +919,10 @@ const Invoices = () => {
                     </Command>
                   </PopoverContent>
                 </Popover>
+                </div>
               </div>
 
-              <div className="max-h-56 overflow-y-auto rounded-md border divide-y overscroll-contain">
+              <div className="max-h-56 overflow-y-auto overflow-x-hidden rounded-md border divide-y overscroll-contain min-w-0">
                 {productsLoading ? (
                   <p className="p-3 text-sm text-muted-foreground text-center">Loading products...</p>
                 ) : filteredCreateProducts.length === 0 ? (
@@ -928,12 +936,12 @@ const Invoices = () => {
                         type="button"
                         onClick={() => addProductQuick(product)}
                         className={cn(
-                          "w-full text-left px-3 py-2.5 min-h-11 flex items-center gap-3 hover:bg-muted/80 active:bg-muted transition-colors",
+                          "w-full max-w-full text-left px-3 py-2.5 min-h-11 flex items-center gap-2 hover:bg-muted/80 active:bg-muted transition-colors",
                           qty > 0 && "bg-primary/5"
                         )}
                       >
-                        <div className="min-w-0 flex-1">
-                          <div className="flex items-baseline gap-2">
+                        <div className="min-w-0 flex-1 overflow-hidden">
+                          <div className="flex flex-col gap-0.5 sm:flex-row sm:items-baseline sm:gap-2">
                             <span className="font-mono text-sm font-semibold shrink-0">
                               {product.sku || "—"}
                             </span>
@@ -958,26 +966,28 @@ const Invoices = () => {
             </div>
 
             {items.length > 0 && (
-              <div className="rounded-md border">
-                <Table>
-                  <TableHeader>
-                    <TableRow>
-                      <TableHead>SKU</TableHead>
-                      <TableHead>Flavor</TableHead>
-                      <TableHead className="w-24">Qty</TableHead>
-                      <TableHead className="w-28">Price</TableHead>
-                      <TableHead className="w-28">Subtotal</TableHead>
-                      <TableHead className="w-12" />
-                    </TableRow>
-                  </TableHeader>
-                  <TableBody>
-                    {items.map((item, index) => (
-                      <TableRow key={`${item.product_id}-${index}`}>
-                        <TableCell className="font-mono text-sm">
-                          {item.product_sku || "-"}
-                        </TableCell>
-                        <TableCell>{item.product_name}</TableCell>
-                        <TableCell>
+              <>
+                {/* Mobile line items — no horizontal scroll */}
+                <div className="md:hidden space-y-2 min-w-0">
+                  {items.map((item, index) => (
+                    <div key={`${item.product_id}-${index}`} className="rounded-md border p-3 space-y-2">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <p className="font-mono text-sm font-semibold">{item.product_sku || "—"}</p>
+                          <p className="text-sm truncate">{item.product_name}</p>
+                        </div>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          className="shrink-0 h-9 w-9 p-0"
+                          onClick={() => setItems(items.filter((_, i) => i !== index))}
+                        >
+                          <Trash2 className="h-4 w-4 text-destructive" />
+                        </Button>
+                      </div>
+                      <div className="grid grid-cols-2 gap-2">
+                        <div className="space-y-1">
+                          <Label className="text-xs">Qty</Label>
                           <Input
                             type="number"
                             min="1"
@@ -985,8 +995,9 @@ const Invoices = () => {
                             value={item.quantity}
                             onChange={(e) => updateLine(index, "quantity", Number(e.target.value))}
                           />
-                        </TableCell>
-                        <TableCell>
+                        </div>
+                        <div className="space-y-1">
+                          <Label className="text-xs">Price</Label>
                           <Input
                             type="number"
                             min="0"
@@ -995,26 +1006,76 @@ const Invoices = () => {
                             value={item.unit_price}
                             onChange={(e) => updateLine(index, "unit_price", Number(e.target.value))}
                           />
-                        </TableCell>
-                        <TableCell>${item.subtotal.toFixed(2)}</TableCell>
-                        <TableCell>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => setItems(items.filter((_, i) => i !== index))}
-                          >
-                            <Trash2 className="h-4 w-4 text-destructive" />
-                          </Button>
-                        </TableCell>
+                        </div>
+                      </div>
+                      <p className="text-sm text-right font-medium">
+                        Subtotal ${item.subtotal.toFixed(2)}
+                      </p>
+                    </div>
+                  ))}
+                </div>
+
+                {/* Desktop table */}
+                <div className="hidden md:block rounded-md border overflow-x-auto">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>SKU</TableHead>
+                        <TableHead>Flavor</TableHead>
+                        <TableHead className="w-24">Qty</TableHead>
+                        <TableHead className="w-28">Price</TableHead>
+                        <TableHead className="w-28">Subtotal</TableHead>
+                        <TableHead className="w-12" />
                       </TableRow>
-                    ))}
-                  </TableBody>
-                </Table>
-              </div>
+                    </TableHeader>
+                    <TableBody>
+                      {items.map((item, index) => (
+                        <TableRow key={`${item.product_id}-${index}`}>
+                          <TableCell className="font-mono text-sm">
+                            {item.product_sku || "-"}
+                          </TableCell>
+                          <TableCell>{item.product_name}</TableCell>
+                          <TableCell>
+                            <Input
+                              type="number"
+                              min="1"
+                              inputMode="numeric"
+                              value={item.quantity}
+                              onChange={(e) => updateLine(index, "quantity", Number(e.target.value))}
+                            />
+                          </TableCell>
+                          <TableCell>
+                            <Input
+                              type="number"
+                              min="0"
+                              step="0.01"
+                              inputMode="decimal"
+                              value={item.unit_price}
+                              onChange={(e) =>
+                                updateLine(index, "unit_price", Number(e.target.value))
+                              }
+                            />
+                          </TableCell>
+                          <TableCell>${item.subtotal.toFixed(2)}</TableCell>
+                          <TableCell>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => setItems(items.filter((_, i) => i !== index))}
+                            >
+                              <Trash2 className="h-4 w-4 text-destructive" />
+                            </Button>
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              </>
             )}
 
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div className="space-y-2">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 min-w-0">
+              <div className="space-y-2 min-w-0">
                 <Label>Discount</Label>
                 <Input
                   type="number"
@@ -1024,15 +1085,15 @@ const Invoices = () => {
                   onChange={(e) => setDiscountAmount(e.target.value)}
                 />
               </div>
-              <div className="space-y-2">
+              <div className="space-y-2 min-w-0">
                 <Label>Notes</Label>
                 <Textarea value={notes} onChange={(e) => setNotes(e.target.value)} rows={2} />
               </div>
             </div>
 
-            <div className="rounded-md border p-3 space-y-3">
+            <div className="rounded-md border p-3 space-y-3 min-w-0">
               <p className="text-sm font-medium">Optional payments on create</p>
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
                 <div className="space-y-2">
                   <Label>Cash</Label>
                   <Input
@@ -1066,12 +1127,12 @@ const Invoices = () => {
               </div>
             </div>
 
-            <div className="flex items-center justify-between text-sm border-t pt-3">
+            <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between text-sm border-t pt-3">
               <div className="space-y-1 text-muted-foreground">
                 <div>Subtotal: ${subtotal.toFixed(2)}</div>
                 <div>Payments: ${createPaymentsTotal.toFixed(2)}</div>
               </div>
-              <div className="text-right">
+              <div className="sm:text-right">
                 <div className="text-muted-foreground">Invoice total</div>
                 <div className="text-2xl font-bold">${totalAmount.toFixed(2)}</div>
               </div>
