@@ -227,6 +227,19 @@ def get_invoice(
     return serialize_invoice(invoice, db)
 
 
+@router.delete("/invoices/{invoice_id}", status_code=status.HTTP_204_NO_CONTENT)
+def delete_invoice(
+    invoice_id: UUID,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles(AppRole.admin)),
+) -> None:
+    invoice = load_invoice(db, invoice_id)
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    db.delete(invoice)
+    db.commit()
+
+
 @router.post("/invoices/legacy-balance", response_model=InvoiceOut, status_code=status.HTTP_201_CREATED)
 def create_legacy_balance(
     payload: LegacyBalanceCreate,

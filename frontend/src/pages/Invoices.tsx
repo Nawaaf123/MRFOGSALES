@@ -28,14 +28,24 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from "@/components/ui/alert-dialog";
 import { useAuth } from "@/lib/auth";
 import { api, ApiError } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 import { generateInvoicePDF, saveInvoicePDF } from "@/lib/pdfGenerator";
 import { CreditDialog } from "@/components/invoices/CreditDialog";
-import { AddOldBalanceDialog } from "@/components/invoices/AddOldBalanceDialog";
 import { DistributePaymentDialog } from "@/components/invoices/DistributePaymentDialog";
-import { DollarSign, Download, Gift, Mail, Plus, SplitSquareVertical, Trash2 } from "lucide-react";
+import { ShopInvoiceGroup } from "@/components/invoices/ShopInvoiceGroup";
+import { Plus } from "lucide-react";
 
 type Shop = {
   id: string;
@@ -49,6 +59,11 @@ type Product = {
   price: number;
   is_active: boolean;
   category: string;
+};
+
+type UserProfile = {
+  id: string;
+  full_name: string;
 };
 
 type PaymentMethod = "cash" | "check" | "credit";
@@ -87,6 +102,7 @@ type Invoice = {
   id: string;
   invoice_number: string;
   shop_id: string;
+  created_by?: string | null;
   total_amount: number;
   discount_amount: number;
   payment_status: PaymentStatus;
@@ -152,6 +168,7 @@ const Invoices = () => {
   const queryClient = useQueryClient();
   const canCreate = user?.role === "admin" || user?.role === "sales" || user?.role === "srour";
   const canPickWarehouse = user?.role === "admin" || user?.role === "srour";
+  const isAdmin = user?.role === "admin";
 
   const [search, setSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
@@ -174,11 +191,11 @@ const Invoices = () => {
   const [payCheckNumber, setPayCheckNumber] = useState("");
   const [payNotes, setPayNotes] = useState("");
 
-  const [oldBalanceOpen, setOldBalanceOpen] = useState(false);
   const [creditInvoice, setCreditInvoice] = useState<Invoice | null>(null);
+  const [viewInvoice, setViewInvoice] = useState<Invoice | null>(null);
+  const [deleteInvoice, setDeleteInvoice] = useState<Invoice | null>(null);
   const [emailingId, setEmailingId] = useState<string | null>(null);
 
-  const [shopPickerOpen, setShopPickerOpen] = useState(false);
   const [distributeTarget, setDistributeTarget] = useState<{
     shopId: string;
     shopName: string;
@@ -211,43 +228,68 @@ const Invoices = () => {
     enabled: createOpen,
   });
 
-  const { data: pendingInvoices = [], isLoading: pendingLoading } = useQuery({
-    queryKey: ["invoices", "pending-for-distribute"],
-    queryFn: async () => {
-      const [unpaid, partial] = await Promise.all([
-        api<Invoice[]>("/invoices?payment_status=unpaid"),
-        api<Invoice[]>("/invoices?payment_status=partial"),
-      ]);
-      return [...unpaid, ...partial];
-    },
-    enabled: shopPickerOpen || !!distributeTarget,
+  const { data: profiles = [] } = useQuery({
+    queryKey: ["users", "profiles-for-invoices"],
+    queryFn: () => api<UserProfile[]>("/users"),
+    enabled: isAdmin,
   });
 
-  const shopsWithPending = useMemo(() => {
+  const profilesForNames = useMemo(() => {
+    if (isAdmin) return profiles;
+    if (user) return [{ id: user.id, full_name: user.full_name }];
+    return [];
+  }, [isAdmin, profiles, user]);
+
+  const shopGroups = useMemo(() => {
     const map = new Map<
       string,
-      { shopId: string; shopName: string; invoices: Invoice[]; totalPending: number }
+      {
+        shopId: string;
+        shopName: string;
+        shopLocation: string;
+        invoices: Invoice[];
+      }
     >();
-    for (const invoice of pendingInvoices) {
-      const shopId = invoice.shop_id || invoice.shop?.id;
-      if (!shopId) continue;
-      const remaining = Math.max(0, Number(invoice.total_amount) - Number(invoice.amount_paid || 0));
-      if (remaining <= 0.01) continue;
-      const existing = map.get(shopId);
+
+    for (const invoice of invoices) {
+      const sid = invoice.shop_id || invoice.shop?.id || "unknown";
+      const shop = invoice.shop;
+      const location = shop
+        ? [shop.street_address, shop.city, shop.state].filter(Boolean).join(", ") || "—"
+        : "—";
+      const existing = map.get(sid);
       if (existing) {
         existing.invoices.push(invoice);
-        existing.totalPending += remaining;
       } else {
-        map.set(shopId, {
-          shopId,
-          shopName: invoice.shop?.name || "Unknown shop",
+        map.set(sid, {
+          shopId: sid,
+          shopName: shop?.name || "Unknown shop",
+          shopLocation: location,
           invoices: [invoice],
-          totalPending: remaining,
         });
       }
     }
-    return Array.from(map.values()).sort((a, b) => b.totalPending - a.totalPending);
-  }, [pendingInvoices]);
+
+    return Array.from(map.values())
+      .map((g) => ({
+        ...g,
+        invoices: [...g.invoices].sort(
+          (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
+        ),
+        pending: g.invoices.reduce(
+          (sum, inv) =>
+            sum + Math.max(0, Number(inv.total_amount) - Number(inv.amount_paid || 0)),
+          0
+        ),
+      }))
+      .sort((a, b) => b.pending - a.pending || a.shopName.localeCompare(b.shopName));
+  }, [invoices]);
+
+  const refetchInvoices = () => {
+    queryClient.invalidateQueries({ queryKey: ["invoices"] });
+    queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
+    queryClient.invalidateQueries({ queryKey: ["pending-payments"] });
+  };
 
   const subtotal = items.reduce((sum, item) => sum + item.subtotal, 0);
   const discount = Number(discountAmount) || 0;
@@ -378,15 +420,26 @@ const Invoices = () => {
       });
     },
     onSuccess: () => {
-      queryClient.invalidateQueries({ queryKey: ["invoices"] });
-      queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
-      queryClient.invalidateQueries({ queryKey: ["pending-payments"] });
+      refetchInvoices();
       setPaymentInvoice(null);
       setPayAmount("");
       setPayMethod("cash");
       setPayCheckNumber("");
       setPayNotes("");
       toast({ title: "Payment recorded" });
+    },
+    onError: (error: ApiError) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const deleteMutation = useMutation({
+    mutationFn: (invoice: Invoice) =>
+      api(`/invoices/${invoice.id}`, { method: "DELETE" }),
+    onSuccess: () => {
+      refetchInvoices();
+      setDeleteInvoice(null);
+      toast({ title: "Invoice deleted" });
     },
     onError: (error: ApiError) => {
       toast({ title: "Error", description: error.message, variant: "destructive" });
@@ -400,6 +453,28 @@ const Invoices = () => {
   const creditRemaining = creditInvoice
     ? Math.max(0, Number(creditInvoice.total_amount) - Number(creditInvoice.amount_paid || 0))
     : 0;
+
+  const openPayment = (invoice: Invoice) => {
+    const remaining = Math.max(0, Number(invoice.total_amount) - Number(invoice.amount_paid || 0));
+    setPaymentInvoice(invoice);
+    setPayAmount(remaining.toFixed(2));
+    setPayMethod("cash");
+    setPayCheckNumber("");
+    setPayNotes("");
+  };
+
+  const exportPdf = async (invoice: Invoice) => {
+    try {
+      const full = await api<Invoice>(`/invoices/${invoice.id}`);
+      await downloadInvoicePdf(full);
+    } catch (error: unknown) {
+      const message =
+        error && typeof error === "object" && "message" in error
+          ? String((error as ApiError).message)
+          : "Could not generate PDF";
+      toast({ title: "PDF failed", description: message, variant: "destructive" });
+    }
+  };
 
   const emailInvoice = async (invoice: Invoice) => {
     setEmailingId(invoice.id);
@@ -461,24 +536,15 @@ const Invoices = () => {
             <p className="text-muted-foreground">Create invoices, track balances, and record payments</p>
           </div>
           {canCreate && (
-            <div className="flex flex-wrap gap-2">
-              <Button variant="outline" onClick={() => setShopPickerOpen(true)}>
-                <SplitSquareVertical className="h-4 w-4 mr-2" />
-                Distribute by Shop
-              </Button>
-              <Button variant="outline" onClick={() => setOldBalanceOpen(true)}>
-                Old Balance
-              </Button>
-              <Button
-                onClick={() => {
-                  resetCreateForm();
-                  setCreateOpen(true);
-                }}
-              >
-                <Plus className="h-4 w-4 mr-2" />
-                New Invoice
-              </Button>
-            </div>
+            <Button
+              onClick={() => {
+                resetCreateForm();
+                setCreateOpen(true);
+              }}
+            >
+              <Plus className="h-4 w-4 mr-2" />
+              New Invoice
+            </Button>
           )}
         </div>
 
@@ -525,118 +591,67 @@ const Invoices = () => {
           </div>
         </Card>
 
-        <div className="rounded-md border">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Invoice</TableHead>
-                <TableHead>Shop</TableHead>
-                <TableHead>Status</TableHead>
-                <TableHead>Total</TableHead>
-                <TableHead>Paid</TableHead>
-                <TableHead>Remaining</TableHead>
-                <TableHead>Created</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {isLoading ? (
-                <TableRow>
-                  <TableCell colSpan={8}>Loading...</TableCell>
-                </TableRow>
-              ) : invoices.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={8}>No invoices found</TableCell>
-                </TableRow>
-              ) : (
-                invoices.map((invoice) => {
-                  const paid = Number(invoice.amount_paid || 0);
-                  const remaining = Math.max(0, Number(invoice.total_amount) - paid);
-                  return (
-                    <TableRow key={invoice.id}>
-                      <TableCell className="font-medium">{invoice.invoice_number}</TableCell>
-                      <TableCell>{invoice.shop?.name || "-"}</TableCell>
-                      <TableCell>
-                        <Badge variant={statusBadgeVariant(invoice.payment_status)} className="capitalize">
-                          {invoice.payment_status}
-                        </Badge>
-                      </TableCell>
-                      <TableCell>${Number(invoice.total_amount).toFixed(2)}</TableCell>
-                      <TableCell>${paid.toFixed(2)}</TableCell>
-                      <TableCell className={remaining > 0 ? "font-semibold" : undefined}>
-                        ${remaining.toFixed(2)}
-                      </TableCell>
-                      <TableCell>{new Date(invoice.created_at).toLocaleString()}</TableCell>
-                      <TableCell className="text-right">
-                        <div className="flex justify-end flex-wrap gap-2">
-                          <Button
-                            variant="outline"
-                            size="sm"
-                            onClick={async () => {
-                              try {
-                                const full = await api<Invoice>(`/invoices/${invoice.id}`);
-                                await downloadInvoicePdf(full);
-                              } catch (error: unknown) {
-                                const message =
-                                  error && typeof error === "object" && "message" in error
-                                    ? String((error as ApiError).message)
-                                    : "Could not generate PDF";
-                                toast({
-                                  title: "PDF failed",
-                                  description: message,
-                                  variant: "destructive",
-                                });
-                              }
-                            }}
-                          >
-                            <Download className="h-4 w-4 mr-1" />
-                            PDF
-                          </Button>
-                          {canCreate && (
-                            <Button
-                              variant="outline"
-                              size="sm"
-                              disabled={emailingId === invoice.id}
-                              onClick={() => emailInvoice(invoice)}
-                            >
-                              <Mail className="h-4 w-4 mr-1" />
-                              {emailingId === invoice.id ? "Sending..." : "Email"}
-                            </Button>
-                          )}
-                          {canCreate && remaining > 0.01 && (
-                            <>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => setCreditInvoice(invoice)}
-                              >
-                                <Gift className="h-4 w-4 mr-1" />
-                                Credit
-                              </Button>
-                              <Button
-                                variant="outline"
-                                size="sm"
-                                onClick={() => {
-                                  setPaymentInvoice(invoice);
-                                  setPayAmount(remaining.toFixed(2));
-                                  setPayMethod("cash");
-                                  setPayCheckNumber("");
-                                  setPayNotes("");
-                                }}
-                              >
-                                <DollarSign className="h-4 w-4 mr-1" />
-                                Pay
-                              </Button>
-                            </>
-                          )}
-                        </div>
-                      </TableCell>
-                    </TableRow>
-                  );
-                })
-              )}
-            </TableBody>
-          </Table>
+        <div className="space-y-2">
+          {isLoading ? (
+            <p className="text-sm text-muted-foreground py-8 text-center">Loading...</p>
+          ) : shopGroups.length === 0 ? (
+            <p className="text-sm text-muted-foreground py-8 text-center">No invoices found</p>
+          ) : (
+            shopGroups.map((group) => (
+              <ShopInvoiceGroup
+                key={group.shopId}
+                shopId={group.shopId}
+                shopName={group.shopName}
+                shopLocation={group.shopLocation}
+                invoices={group.invoices.map((inv) => ({
+                  id: inv.id,
+                  invoice_number: inv.invoice_number,
+                  shop_id: inv.shop_id,
+                  created_by: inv.created_by ?? null,
+                  total_amount: inv.total_amount,
+                  payment_status: inv.payment_status,
+                  created_at: inv.created_at,
+                  amount_paid: inv.amount_paid,
+                }))}
+                onViewInvoice={(inv) => {
+                  const full = invoices.find((i) => i.id === inv.id) || null;
+                  setViewInvoice(full);
+                }}
+                onRecordPayment={(inv) => {
+                  const full = invoices.find((i) => i.id === inv.id);
+                  if (full) openPayment(full);
+                }}
+                onExportPDF={(inv) => {
+                  const full = invoices.find((i) => i.id === inv.id);
+                  if (full) void exportPdf(full);
+                }}
+                onSendEmail={(inv) => {
+                  const full = invoices.find((i) => i.id === inv.id);
+                  if (full) void emailInvoice(full);
+                }}
+                sendingEmailId={emailingId}
+                onDeleteInvoice={(inv) => {
+                  const full = invoices.find((i) => i.id === inv.id) || null;
+                  setDeleteInvoice(full);
+                }}
+                onDistributePayment={(shopId, shopName, pendingInvs, totalPending) => {
+                  const fullInvoices = pendingInvs
+                    .map((p) => invoices.find((i) => i.id === p.id))
+                    .filter((i): i is Invoice => !!i);
+                  setDistributeTarget({
+                    shopId,
+                    shopName,
+                    invoices: fullInvoices,
+                    totalPending,
+                  });
+                }}
+                canManage={canCreate}
+                isAdmin={isAdmin}
+                profiles={profilesForNames}
+                onRefetch={refetchInvoices}
+              />
+            ))
+          )}
         </div>
       </div>
 
@@ -897,8 +912,6 @@ const Invoices = () => {
         </DialogContent>
       </Dialog>
 
-      <AddOldBalanceDialog open={oldBalanceOpen} onOpenChange={setOldBalanceOpen} />
-
       {creditInvoice && (
         <CreditDialog
           open={!!creditInvoice}
@@ -908,45 +921,143 @@ const Invoices = () => {
         />
       )}
 
-      <Dialog open={shopPickerOpen} onOpenChange={setShopPickerOpen}>
-        <DialogContent className="max-w-md">
+      <Dialog open={!!viewInvoice} onOpenChange={(open) => !open && setViewInvoice(null)}>
+        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Distribute by Shop</DialogTitle>
+            <DialogTitle>{viewInvoice?.invoice_number}</DialogTitle>
           </DialogHeader>
-          <div className="space-y-3 max-h-[60vh] overflow-y-auto">
-            {pendingLoading ? (
-              <p className="text-sm text-muted-foreground">Loading pending balances...</p>
-            ) : shopsWithPending.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No shops with unpaid invoices</p>
-            ) : (
-              shopsWithPending.map((shop) => (
-                <button
-                  key={shop.shopId}
-                  type="button"
-                  className="w-full text-left rounded-md border p-3 hover:bg-muted/50 transition-colors"
-                  onClick={() => {
-                    setShopPickerOpen(false);
-                    setDistributeTarget(shop);
-                  }}
-                >
-                  <div className="flex items-center justify-between gap-3">
-                    <div>
-                      <p className="font-medium">{shop.shopName}</p>
-                      <p className="text-xs text-muted-foreground">
-                        {shop.invoices.length} unpaid/partial invoice
-                        {shop.invoices.length === 1 ? "" : "s"}
-                      </p>
-                    </div>
-                    <p className="font-semibold text-orange-600">
-                      ${shop.totalPending.toFixed(2)}
-                    </p>
+          {viewInvoice && (
+            <div className="space-y-4 text-sm">
+              <div className="flex items-center justify-between gap-2">
+                <div>
+                  <p className="font-medium">{viewInvoice.shop?.name || "Unknown shop"}</p>
+                  <p className="text-muted-foreground">
+                    {new Date(viewInvoice.created_at).toLocaleString()}
+                  </p>
+                </div>
+                <Badge variant={statusBadgeVariant(viewInvoice.payment_status)} className="capitalize">
+                  {viewInvoice.payment_status}
+                </Badge>
+              </div>
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <p className="text-muted-foreground text-xs">Total</p>
+                  <p className="font-semibold">${Number(viewInvoice.total_amount).toFixed(2)}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground text-xs">Paid</p>
+                  <p className="font-semibold">${Number(viewInvoice.amount_paid || 0).toFixed(2)}</p>
+                </div>
+                <div>
+                  <p className="text-muted-foreground text-xs">Pending</p>
+                  <p className="font-semibold text-orange-600">
+                    $
+                    {Math.max(
+                      0,
+                      Number(viewInvoice.total_amount) - Number(viewInvoice.amount_paid || 0)
+                    ).toFixed(2)}
+                  </p>
+                </div>
+              </div>
+              {(viewInvoice.items || []).length > 0 && (
+                <div className="rounded-md border">
+                  <Table>
+                    <TableHeader>
+                      <TableRow>
+                        <TableHead>Item</TableHead>
+                        <TableHead>Qty</TableHead>
+                        <TableHead className="text-right">Subtotal</TableHead>
+                      </TableRow>
+                    </TableHeader>
+                    <TableBody>
+                      {viewInvoice.items.map((item, idx) => (
+                        <TableRow key={item.id || `${item.product_id}-${idx}`}>
+                          <TableCell>{item.product_name}</TableCell>
+                          <TableCell>{item.quantity}</TableCell>
+                          <TableCell className="text-right">
+                            ${Number(item.subtotal).toFixed(2)}
+                          </TableCell>
+                        </TableRow>
+                      ))}
+                    </TableBody>
+                  </Table>
+                </div>
+              )}
+              {(viewInvoice.payments || []).length > 0 && (
+                <div>
+                  <p className="font-medium mb-2">Payments</p>
+                  <div className="space-y-1">
+                    {viewInvoice.payments.map((p) => (
+                      <div key={p.id} className="flex justify-between text-muted-foreground">
+                        <span>
+                          {p.payment_method} · {p.payment_date}
+                        </span>
+                        <span className="text-foreground font-medium">
+                          ${Number(p.amount).toFixed(2)}
+                        </span>
+                      </div>
+                    ))}
                   </div>
-                </button>
-              ))
-            )}
-          </div>
+                </div>
+              )}
+              {viewInvoice.notes && (
+                <p className="text-muted-foreground whitespace-pre-wrap">{viewInvoice.notes}</p>
+              )}
+              <div className="flex flex-wrap justify-end gap-2 pt-2">
+                {canCreate &&
+                  Math.max(
+                    0,
+                    Number(viewInvoice.total_amount) - Number(viewInvoice.amount_paid || 0)
+                  ) > 0.01 && (
+                    <>
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        onClick={() => {
+                          setCreditInvoice(viewInvoice);
+                          setViewInvoice(null);
+                        }}
+                      >
+                        Credit
+                      </Button>
+                      <Button
+                        size="sm"
+                        onClick={() => {
+                          openPayment(viewInvoice);
+                          setViewInvoice(null);
+                        }}
+                      >
+                        Pay
+                      </Button>
+                    </>
+                  )}
+              </div>
+            </div>
+          )}
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={!!deleteInvoice} onOpenChange={(open) => !open && setDeleteInvoice(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Delete invoice?</AlertDialogTitle>
+            <AlertDialogDescription>
+              This permanently deletes {deleteInvoice?.invoice_number} and its payments. This cannot
+              be undone.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              disabled={deleteMutation.isPending || !deleteInvoice}
+              onClick={() => deleteInvoice && deleteMutation.mutate(deleteInvoice)}
+            >
+              {deleteMutation.isPending ? "Deleting..." : "Delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
 
       {distributeTarget && (
         <DistributePaymentDialog
@@ -956,9 +1067,7 @@ const Invoices = () => {
           shopName={distributeTarget.shopName}
           invoices={distributeTarget.invoices}
           totalPending={distributeTarget.totalPending}
-          onRefetch={() => {
-            queryClient.invalidateQueries({ queryKey: ["invoices"] });
-          }}
+          onRefetch={refetchInvoices}
         />
       )}
     </DashboardLayout>

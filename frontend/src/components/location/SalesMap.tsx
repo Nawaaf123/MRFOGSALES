@@ -361,6 +361,11 @@ export const LocationsMap = ({
 
       m.on("error", (e) => {
         console.error("Mapbox error", e);
+        const msg =
+          (e as { error?: { message?: string } })?.error?.message ||
+          "Map failed to load. Check the Mapbox token and URL restrictions.";
+        setMapError(msg);
+        setLoading(false);
       });
 
       const showShopPopup = (

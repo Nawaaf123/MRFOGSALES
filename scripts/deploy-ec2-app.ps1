@@ -162,8 +162,12 @@ Write-Host "Building and starting containers on EC2 (first build can take 5-10 m
 $up = @'
 set -e
 cd /opt/mrfogsales
+# Rebuild web without cache so VITE_MAPBOX_TOKEN is always baked into the JS bundle
+docker compose -f docker-compose.yml --env-file .env build --no-cache web
 docker compose -f docker-compose.yml --env-file .env up -d --build
 docker compose -f docker-compose.yml ps
+# Confirm Mapbox token made it into the frontend image env at build time
+grep -E '^VITE_MAPBOX_TOKEN=' .env | sed 's/=.*/=***configured***/'
 '@
 Invoke-RemoteBash $up
 

@@ -34,23 +34,40 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    let cancelled = false;
     const token = getToken();
     if (!token) {
       setLoading(false);
       return;
     }
 
+    const timeout = window.setTimeout(() => {
+      if (!cancelled) {
+        setLoading(false);
+      }
+    }, 8_000);
+
     api<AuthUser>("/auth/me")
       .then((me) => {
+        if (cancelled) return;
         setUser(me);
         setSession({ access_token: token });
       })
       .catch(() => {
+        if (cancelled) return;
         setToken(null);
         setUser(null);
         setSession(null);
       })
-      .finally(() => setLoading(false));
+      .finally(() => {
+        if (!cancelled) setLoading(false);
+        window.clearTimeout(timeout);
+      });
+
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeout);
+    };
   }, []);
 
   const signUp = async (email: string, password: string, fullName: string) => {

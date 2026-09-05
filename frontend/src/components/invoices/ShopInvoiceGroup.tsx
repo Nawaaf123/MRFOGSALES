@@ -1,5 +1,5 @@
 import { useState } from "react";
-import { ChevronDown, ChevronRight, DollarSign, Plus, Pencil } from "lucide-react";
+import { ChevronDown, ChevronRight, DollarSign, Plus, Eye, Download, Trash2, Mail, Loader2 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -10,28 +10,45 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
-import { Eye, Edit, Download, Trash2, Mail, Loader2 } from "lucide-react";
 import { Card, CardContent } from "@/components/ui/card";
 import { AddLegacyBalanceDialog } from "./AddLegacyBalanceDialog";
+
+export type ShopGroupInvoice = {
+  id: string;
+  invoice_number: string;
+  shop_id: string;
+  created_by: string | null;
+  total_amount: number;
+  payment_status: "paid" | "partial" | "unpaid";
+  created_at: string;
+  amount_paid: number;
+};
 
 interface ShopInvoiceGroupProps {
   shopId: string;
   shopName: string;
   shopLocation: string;
-  invoices: any[];
-  allPayments: any[];
-  onViewInvoice: (invoice: any) => void;
-  onRecordPayment: (invoice: any) => void;
-  onUpdateStatus: (invoice: any) => void;
-  onEditInvoice: (invoice: any) => void;
-  onExportPDF: (invoice: any) => void;
-  onSendEmail: (invoice: any) => void;
+  invoices: ShopGroupInvoice[];
+  onViewInvoice: (invoice: ShopGroupInvoice) => void;
+  onRecordPayment: (invoice: ShopGroupInvoice) => void;
+  onExportPDF: (invoice: ShopGroupInvoice) => void;
+  onSendEmail: (invoice: ShopGroupInvoice) => void;
   sendingEmailId: string | null;
-  onDeleteInvoice: (invoice: any) => void;
-  onDistributePayment: (shopName: string, invoices: any[], totalPending: number) => void;
+  onDeleteInvoice: (invoice: ShopGroupInvoice) => void;
+  onDistributePayment: (
+    shopId: string,
+    shopName: string,
+    invoices: ShopGroupInvoice[],
+    totalPending: number
+  ) => void;
+  canManage: boolean;
   isAdmin: boolean;
   profiles?: { id: string; full_name: string }[];
   onRefetch?: () => void;
+}
+
+function pendingOf(invoice: ShopGroupInvoice) {
+  return Math.max(0, Number(invoice.total_amount) - Number(invoice.amount_paid || 0));
 }
 
 export const ShopInvoiceGroup = ({
@@ -39,16 +56,14 @@ export const ShopInvoiceGroup = ({
   shopName,
   shopLocation,
   invoices,
-  allPayments,
   onViewInvoice,
   onRecordPayment,
-  onUpdateStatus,
-  onEditInvoice,
   onExportPDF,
   onSendEmail,
   sendingEmailId,
   onDeleteInvoice,
   onDistributePayment,
+  canManage,
   isAdmin,
   profiles,
   onRefetch,
@@ -56,24 +71,14 @@ export const ShopInvoiceGroup = ({
   const [isExpanded, setIsExpanded] = useState(false);
   const [legacyBalanceDialogOpen, setLegacyBalanceDialogOpen] = useState(false);
 
-  const getPendingAmount = (invoiceId: string, totalAmount: number) => {
-    const invoicePayments = allPayments?.filter(p => p.invoice_id === invoiceId) || [];
-    const totalPaid = invoicePayments.reduce((sum, p) => sum + Number(p.amount), 0);
-    return totalAmount - totalPaid;
-  };
-
   const getStatusBadge = (status: string) => {
     const variants: Record<string, "default" | "secondary" | "destructive"> = {
       paid: "default",
       partial: "secondary",
       unpaid: "destructive",
     };
-
     const className =
-      status === "paid"
-        ? "border-transparent bg-green-600 text-white hover:bg-green-600/80"
-        : "";
-
+      status === "paid" ? "border-transparent bg-green-600 text-white hover:bg-green-600/80" : "";
     return (
       <Badge variant={variants[status] || "default"} className={className}>
         {status.charAt(0).toUpperCase() + status.slice(1)}
@@ -81,21 +86,74 @@ export const ShopInvoiceGroup = ({
     );
   };
 
-  // Calculate totals for this shop
   const totalAmount = invoices.reduce((sum, inv) => sum + Number(inv.total_amount), 0);
-  const totalPending = invoices.reduce((sum, inv) => {
-    return sum + getPendingAmount(inv.id, Number(inv.total_amount));
-  }, 0);
-  
-  // Filter for invoices with pending amounts
-  const invoicesWithPending = invoices.filter(inv => 
-    getPendingAmount(inv.id, Number(inv.total_amount)) > 0
-  );
+  const totalPending = invoices.reduce((sum, inv) => sum + pendingOf(inv), 0);
+  const invoicesWithPending = invoices.filter((inv) => pendingOf(inv) > 0.01);
+
+  const creatorName = (createdBy: string | null) => {
+    if (!createdBy) return "Unknown";
+    return profiles?.find((p) => p.id === createdBy)?.full_name ?? "Unknown";
+  };
+
+  const actionButtons = (invoice: ShopGroupInvoice, outline: boolean) => {
+    const variant = outline ? "outline" : "ghost";
+    const pending = pendingOf(invoice);
+    return (
+      <>
+        <Button variant={variant} size="sm" onClick={() => onViewInvoice(invoice)} title="View">
+          <Eye className="h-4 w-4" />
+        </Button>
+        {canManage && pending > 0.01 && (
+          <Button
+            variant={variant}
+            size="sm"
+            onClick={() => onRecordPayment(invoice)}
+            title="Record Payment"
+          >
+            <DollarSign className="h-4 w-4" />
+          </Button>
+        )}
+        <Button
+          variant={variant}
+          size="sm"
+          onClick={() => onExportPDF(invoice)}
+          title="Export PDF"
+        >
+          <Download className="h-4 w-4" />
+        </Button>
+        {canManage && (
+          <Button
+            variant={variant}
+            size="sm"
+            onClick={() => onSendEmail(invoice)}
+            title="Send Email"
+            disabled={sendingEmailId === invoice.id}
+          >
+            {sendingEmailId === invoice.id ? (
+              <Loader2 className="h-4 w-4 animate-spin" />
+            ) : (
+              <Mail className="h-4 w-4" />
+            )}
+          </Button>
+        )}
+        {isAdmin && (
+          <Button
+            variant={variant}
+            size="sm"
+            onClick={() => onDeleteInvoice(invoice)}
+            title="Delete Invoice"
+            className="text-destructive hover:text-destructive"
+          >
+            <Trash2 className="h-4 w-4" />
+          </Button>
+        )}
+      </>
+    );
+  };
 
   return (
-    <div className="border rounded-lg mb-4">
-      {/* Shop Header */}
-      <div className="bg-muted p-3 md:p-4">
+    <div className="border rounded-lg mb-4 bg-card shadow-sm">
+      <div className="bg-muted/70 p-3 md:p-4">
         <div className="flex items-start gap-2 md:gap-3">
           <Button
             variant="ghost"
@@ -103,13 +161,9 @@ export const ShopInvoiceGroup = ({
             onClick={() => setIsExpanded(!isExpanded)}
             className="h-8 w-8 p-0 flex-shrink-0"
           >
-            {isExpanded ? (
-              <ChevronDown className="h-4 w-4" />
-            ) : (
-              <ChevronRight className="h-4 w-4" />
-            )}
+            {isExpanded ? <ChevronDown className="h-4 w-4" /> : <ChevronRight className="h-4 w-4" />}
           </Button>
-          
+
           <div className="flex-1 min-w-0">
             <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-2">
               <div className="min-w-0">
@@ -119,7 +173,7 @@ export const ShopInvoiceGroup = ({
                   {invoices.length} invoice(s)
                 </Badge>
               </div>
-              
+
               <div className="flex flex-wrap items-center gap-2 md:gap-4">
                 <div className="text-left sm:text-right">
                   <p className="text-xs text-muted-foreground">Total</p>
@@ -127,45 +181,52 @@ export const ShopInvoiceGroup = ({
                 </div>
                 <div className="text-left sm:text-right">
                   <p className="text-xs text-muted-foreground">Pending</p>
-                  <p className={`text-lg md:text-xl font-bold ${totalPending > 0 ? 'text-orange-600' : 'text-green-600'}`}>
+                  <p
+                    className={`text-lg md:text-xl font-bold ${
+                      totalPending > 0 ? "text-orange-600" : "text-green-600"
+                    }`}
+                  >
                     ${totalPending.toFixed(2)}
                   </p>
                 </div>
-                <div className="flex gap-2">
-                  <Button
-                    onClick={() => setLegacyBalanceDialogOpen(true)}
-                    size="sm"
-                    variant="outline"
-                    className="w-full sm:w-auto"
-                    title="Add old/legacy balance for this shop"
-                  >
-                    <Plus className="h-4 w-4 mr-1" />
-                    <span className="hidden sm:inline">Old Balance</span>
-                    <span className="sm:hidden">Balance</span>
-                  </Button>
-                  {totalPending > 0 && (
+                {canManage && (
+                  <div className="flex gap-2">
                     <Button
-                      onClick={() => onDistributePayment(shopName, invoicesWithPending, totalPending)}
+                      onClick={() => setLegacyBalanceDialogOpen(true)}
                       size="sm"
+                      variant="outline"
                       className="w-full sm:w-auto"
+                      title="Add old/legacy balance for this shop"
                     >
-                      <DollarSign className="h-4 w-4 mr-1" />
-                      Pay
+                      <Plus className="h-4 w-4 mr-1" />
+                      <span className="hidden sm:inline">Old Balance</span>
+                      <span className="sm:hidden">Balance</span>
                     </Button>
-                  )}
-                </div>
+                    {totalPending > 0.01 && (
+                      <Button
+                        onClick={() =>
+                          onDistributePayment(shopId, shopName, invoicesWithPending, totalPending)
+                        }
+                        size="sm"
+                        className="w-full sm:w-auto bg-red-600 hover:bg-red-700 text-white"
+                      >
+                        <DollarSign className="h-4 w-4 mr-1" />
+                        Pay
+                      </Button>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           </div>
         </div>
       </div>
 
-      {/* Invoices - Mobile Cards */}
       {isExpanded && (
         <>
           <div className="md:hidden p-3 space-y-3">
             {invoices.map((invoice) => {
-              const pendingAmount = getPendingAmount(invoice.id, Number(invoice.total_amount));
+              const pendingAmount = pendingOf(invoice);
               return (
                 <Card key={invoice.id}>
                   <CardContent className="p-3">
@@ -178,59 +239,26 @@ export const ShopInvoiceGroup = ({
                       </div>
                       {getStatusBadge(invoice.payment_status)}
                     </div>
-                    
+
                     <div className="grid grid-cols-2 gap-2 text-sm mb-3">
                       <div>
                         <span className="text-muted-foreground">Amount</span>
-                        <p className="font-semibold">${parseFloat(invoice.total_amount).toFixed(2)}</p>
+                        <p className="font-semibold">${Number(invoice.total_amount).toFixed(2)}</p>
                       </div>
                       <div>
                         <span className="text-muted-foreground">Pending</span>
-                        <p className={`font-semibold ${pendingAmount > 0 ? 'text-orange-600' : 'text-green-600'}`}>
+                        <p
+                          className={`font-semibold ${
+                            pendingAmount > 0 ? "text-orange-600" : "text-green-600"
+                          }`}
+                        >
                           ${pendingAmount.toFixed(2)}
                         </p>
                       </div>
                     </div>
-                    
+
                     <div className="flex flex-wrap gap-1 border-t pt-2">
-                      <Button variant="outline" size="sm" onClick={() => onViewInvoice(invoice)}>
-                        <Eye className="h-4 w-4" />
-                      </Button>
-                      {invoice.payment_status !== "paid" && (
-                        <Button variant="outline" size="sm" onClick={() => onRecordPayment(invoice)}>
-                          <DollarSign className="h-4 w-4" />
-                        </Button>
-                      )}
-                      {isAdmin && (
-                        <Button variant="outline" size="sm" onClick={() => onEditInvoice(invoice)} title="Edit Invoice">
-                          <Pencil className="h-4 w-4" />
-                        </Button>
-                      )}
-                      {isAdmin && (
-                        <Button variant="outline" size="sm" onClick={() => onUpdateStatus(invoice)} title="Update Status">
-                          <Edit className="h-4 w-4" />
-                        </Button>
-                      )}
-                      <Button variant="outline" size="sm" onClick={() => onExportPDF(invoice)}>
-                        <Download className="h-4 w-4" />
-                      </Button>
-                      <Button 
-                        variant="outline" 
-                        size="sm" 
-                        onClick={() => onSendEmail(invoice)}
-                        disabled={sendingEmailId === invoice.id}
-                      >
-                        {sendingEmailId === invoice.id ? (
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                        ) : (
-                          <Mail className="h-4 w-4" />
-                        )}
-                      </Button>
-                      {isAdmin && (
-                        <Button variant="outline" size="sm" onClick={() => onDeleteInvoice(invoice)} className="text-destructive">
-                          <Trash2 className="h-4 w-4" />
-                        </Button>
-                      )}
+                      {actionButtons(invoice, true)}
                     </div>
                   </CardContent>
                 </Card>
@@ -238,8 +266,7 @@ export const ShopInvoiceGroup = ({
             })}
           </div>
 
-          {/* Invoices - Desktop Table */}
-          <div className="hidden md:block overflow-hidden">
+          <div className="hidden md:block overflow-x-auto">
             <Table>
               <TableHeader>
                 <TableRow>
@@ -254,97 +281,27 @@ export const ShopInvoiceGroup = ({
               </TableHeader>
               <TableBody>
                 {invoices.map((invoice) => {
-                  const pendingAmount = getPendingAmount(invoice.id, Number(invoice.total_amount));
+                  const pendingAmount = pendingOf(invoice);
                   return (
                     <TableRow key={invoice.id}>
                       <TableCell className="font-medium">{invoice.invoice_number}</TableCell>
-                      <TableCell>
-                        {new Date(invoice.created_at).toLocaleDateString()}
-                      </TableCell>
+                      <TableCell>{new Date(invoice.created_at).toLocaleDateString()}</TableCell>
                       <TableCell className="font-semibold">
-                        ${parseFloat(invoice.total_amount).toFixed(2)}
+                        ${Number(invoice.total_amount).toFixed(2)}
                       </TableCell>
                       <TableCell>
-                        <span className={`font-semibold ${pendingAmount > 0 ? 'text-orange-600' : 'text-green-600'}`}>
+                        <span
+                          className={`font-semibold ${
+                            pendingAmount > 0 ? "text-orange-600" : "text-green-600"
+                          }`}
+                        >
                           ${pendingAmount.toFixed(2)}
                         </span>
                       </TableCell>
                       <TableCell>{getStatusBadge(invoice.payment_status)}</TableCell>
-                      <TableCell>
-                        {profiles?.find((p) => p.id === invoice.created_by)?.full_name ?? "Unknown"}
-                      </TableCell>
+                      <TableCell>{creatorName(invoice.created_by)}</TableCell>
                       <TableCell className="text-right">
-                        <div className="flex justify-end gap-2">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => onViewInvoice(invoice)}
-                          >
-                            <Eye className="h-4 w-4" />
-                          </Button>
-                          {invoice.payment_status !== "paid" && (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => onRecordPayment(invoice)}
-                              title="Record Payment"
-                            >
-                              <DollarSign className="h-4 w-4" />
-                            </Button>
-                          )}
-                          {isAdmin && (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => onEditInvoice(invoice)}
-                              title="Edit Invoice"
-                            >
-                              <Pencil className="h-4 w-4" />
-                            </Button>
-                          )}
-                          {isAdmin && (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => onUpdateStatus(invoice)}
-                              title="Update Status"
-                            >
-                              <Edit className="h-4 w-4" />
-                            </Button>
-                          )}
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => onExportPDF(invoice)}
-                            title="Export PDF"
-                          >
-                            <Download className="h-4 w-4" />
-                          </Button>
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            onClick={() => onSendEmail(invoice)}
-                            title="Send Email"
-                            disabled={sendingEmailId === invoice.id}
-                          >
-                            {sendingEmailId === invoice.id ? (
-                              <Loader2 className="h-4 w-4 animate-spin" />
-                            ) : (
-                              <Mail className="h-4 w-4" />
-                            )}
-                          </Button>
-                          {isAdmin && (
-                            <Button
-                              variant="ghost"
-                              size="sm"
-                              onClick={() => onDeleteInvoice(invoice)}
-                              title="Delete Invoice"
-                              className="text-destructive hover:text-destructive"
-                            >
-                              <Trash2 className="h-4 w-4" />
-                            </Button>
-                          )}
-                        </div>
+                        <div className="flex justify-end gap-1">{actionButtons(invoice, false)}</div>
                       </TableCell>
                     </TableRow>
                   );
@@ -355,14 +312,15 @@ export const ShopInvoiceGroup = ({
         </>
       )}
 
-      {/* Legacy Balance Dialog */}
-      <AddLegacyBalanceDialog
-        open={legacyBalanceDialogOpen}
-        onOpenChange={setLegacyBalanceDialogOpen}
-        shopId={shopId}
-        shopName={shopName}
-        onSuccess={onRefetch}
-      />
+      {canManage && (
+        <AddLegacyBalanceDialog
+          open={legacyBalanceDialogOpen}
+          onOpenChange={setLegacyBalanceDialogOpen}
+          shopId={shopId}
+          shopName={shopName}
+          onSuccess={onRefetch}
+        />
+      )}
     </div>
   );
 };

@@ -2,7 +2,7 @@ import { useState } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useAuth } from "@/lib/auth";
 import { Button } from "@/components/ui/button";
-import { LogOut, Package, ShoppingBag, FileText, Users, LayoutDashboard, BarChart3, TrendingUp, Menu, ShoppingCart } from "lucide-react";
+import { LogOut, Package, ShoppingBag, FileText, Users, LayoutDashboard, BarChart3, TrendingUp, Menu } from "lucide-react";
 import mrFogLogo from "@/assets/mr-fog-logo.jpg";
 import { cn } from "@/lib/utils";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
@@ -26,7 +26,6 @@ export const DashboardLayout = ({ children }: { children: React.ReactNode }) => 
     { icon: BarChart3, label: "Analytics", path: "/analytics", adminOnly: true },
     { icon: ShoppingBag, label: "Shops", path: "/shops" },
     { icon: FileText, label: "Invoices", path: "/invoices" },
-    { icon: ShoppingCart, label: "Orders", path: "/orders" },
     { icon: TrendingUp, label: "Sales Performance", path: "/sales-performance", adminOnly: true },
     { icon: Users, label: "Users", path: "/users", adminOnly: true },
   ];
@@ -101,7 +100,7 @@ export const DashboardLayout = ({ children }: { children: React.ReactNode }) => 
                   className="gap-2"
                 >
                   <item.icon className="h-4 w-4" />
-                  <span className="hidden lg:inline">{item.label}</span>
+                  <span>{item.label}</span>
                 </Button>
               ))}
             </nav>

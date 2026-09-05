@@ -1,3 +1,4 @@
+import { lazy, Suspense } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { DashboardLayout } from "@/components/DashboardLayout";
 import { api } from "@/lib/api";
@@ -8,7 +9,6 @@ import {
   FileText,
   DollarSign,
   Percent,
-  ClipboardList,
   AlertCircle,
 } from "lucide-react";
 import { StatsCard } from "@/components/dashboard/StatsCard";
@@ -19,7 +19,10 @@ import { TopShops } from "@/components/dashboard/TopShops";
 import { RecentActivity } from "@/components/dashboard/RecentActivity";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { LocationTracker } from "@/components/location/LocationTracker";
-import { LocationsMap } from "@/components/location/SalesMap";
+
+const LocationsMap = lazy(() =>
+  import("@/components/location/SalesMap").then((m) => ({ default: m.LocationsMap }))
+);
 
 type DashboardStats = {
   products_count: number;
@@ -27,7 +30,6 @@ type DashboardStats = {
   invoices_count: number;
   total_revenue: number;
   collection_rate: number;
-  pending_orders?: number;
   unpaid_invoices?: number;
 };
 
@@ -82,13 +84,6 @@ const Dashboard = () => {
         </div>
 
         <div className="grid gap-4 md:grid-cols-2">
-          <StatsCard
-            title="Pending Orders"
-            value={isLoading ? "..." : String(stats?.pending_orders ?? 0)}
-            icon={ClipboardList}
-            href="/orders"
-            description="Awaiting admin review"
-          />
           <StatsCard
             title="Unpaid Invoices"
             value={isLoading ? "..." : String(stats?.unpaid_invoices ?? 0)}
@@ -153,7 +148,15 @@ const Dashboard = () => {
                 Shop pins and live salesperson GPS on one map
               </p>
             </div>
-            <LocationsMap />
+            <Suspense
+              fallback={
+                <div className="flex h-[400px] items-center justify-center rounded-md border text-sm text-muted-foreground">
+                  Loading map...
+                </div>
+              }
+            >
+              <LocationsMap />
+            </Suspense>
           </div>
         )}
 

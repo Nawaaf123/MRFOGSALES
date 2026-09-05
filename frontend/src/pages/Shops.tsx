@@ -23,7 +23,6 @@ import { useAuth } from "@/lib/auth";
 import { api, ApiError } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 import { BulkUploadDialog } from "@/components/shops/BulkUploadDialog";
-import { LocationsMap } from "@/components/location/SalesMap";
 import { Edit, Mail, MapPin, Phone, Plus, Snowflake, Sun, Upload } from "lucide-react";
 
 type Shop = {
@@ -237,6 +236,16 @@ const Shops = () => {
           </div>
           {canManage && (
             <div className="flex flex-wrap gap-2">
+              {isAdmin && (
+                <Button
+                  variant="outline"
+                  disabled={geocodeMutation.isPending}
+                  onClick={() => geocodeMutation.mutate()}
+                >
+                  <MapPin className="h-4 w-4 mr-2" />
+                  {geocodeMutation.isPending ? "Geocoding..." : "Geocode missing"}
+                </Button>
+              )}
               <Button variant="outline" onClick={() => setBulkOpen(true)}>
                 <Upload className="h-4 w-4 mr-2" />
                 Bulk Import
@@ -255,29 +264,6 @@ const Shops = () => {
           onChange={(e) => setSearch(e.target.value)}
           className="max-w-md"
         />
-
-        <div className="space-y-2">
-          <div>
-            <h2 className="text-lg font-semibold">Shop and sales map</h2>
-            <p className="text-sm text-muted-foreground">
-              Blue pins are shops; red pins are live salesperson GPS
-            </p>
-          </div>
-          {isAdmin && (
-            <div className="flex justify-end">
-              <Button
-                variant="outline"
-                size="sm"
-                disabled={geocodeMutation.isPending}
-                onClick={() => geocodeMutation.mutate()}
-              >
-                <MapPin className="h-4 w-4 mr-2" />
-                {geocodeMutation.isPending ? "Geocoding..." : "Geocode missing shops"}
-              </Button>
-            </div>
-          )}
-          <LocationsMap heightClassName="h-[420px]" />
-        </div>
 
         <BulkUploadDialog
           open={bulkOpen}
