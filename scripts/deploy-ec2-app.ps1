@@ -15,6 +15,12 @@ try {
   $AdminPass = terraform output -raw seed_admin_password
   $DbPass = terraform output -raw db_password
   $AppSecret = terraform output -raw app_secret
+  $BackupBucket = ""
+  $prevOut = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  $BackupBucket = (terraform output -raw db_backup_bucket 2>$null)
+  if ($LASTEXITCODE -ne 0) { $BackupBucket = "" }
+  $ErrorActionPreference = $prevOut
 }
 finally {
   Pop-Location
@@ -117,7 +123,8 @@ try {
     backend/Dockerfile `
     backend/requirements.txt `
     backend/app `
-    frontend
+    frontend `
+    scripts/ec2-pg-backup.sh
 }
 finally {
   Pop-Location
@@ -171,10 +178,39 @@ grep -E '^VITE_MAPBOX_TOKEN=' .env | sed 's/=.*/=***configured***/'
 '@
 Invoke-RemoteBash $up
 
+if ($BackupBucket) {
+  Write-Host "Installing daily Postgres -> S3 backup (bucket: $BackupBucket)..."
+  $backupInstall = @"
+set -e
+dnf install -y awscli cronie >/dev/null
+systemctl enable --now crond
+sed -i 's/\r$//' /opt/mrfogsales/scripts/ec2-pg-backup.sh
+install -m 0755 /opt/mrfogsales/scripts/ec2-pg-backup.sh /usr/local/bin/mrfogsales-pg-backup
+cat > /etc/mrfogsales-backup.env <<'EOF'
+BACKUP_S3_BUCKET=$BackupBucket
+EOF
+chmod 0644 /etc/mrfogsales-backup.env
+cat > /etc/cron.d/mrfogsales-db-backup <<'EOF'
+# Daily logical Postgres dump to S3 at 08:00 UTC
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin
+0 8 * * * root set -a; . /etc/mrfogsales-backup.env; set +a; /usr/local/bin/mrfogsales-pg-backup >> /var/log/mrfogsales-pg-backup.log 2>&1
+EOF
+chmod 0644 /etc/cron.d/mrfogsales-db-backup
+echo "Backup cron installed. Bucket=$BackupBucket"
+"@
+  Invoke-RemoteBash $backupInstall
+} else {
+  Write-Host "Skipping S3 backup install (terraform output db_backup_bucket missing). Run terraform apply for backups first."
+}
+
 Write-Host ""
 Write-Host "App URL:  $AppUrl"
 Write-Host "Health:   $AppUrl/health"
 Write-Host "Admin:    $AdminEmail"
 Write-Host "Password: $AdminPass"
+if ($BackupBucket) {
+  Write-Host "DB dumps: s3://$BackupBucket/postgres/ (daily 08:00 UTC)"
+}
 Write-Host ""
 Write-Host "Save the admin password (also: cd infra; terraform output -raw seed_admin_password)."
