@@ -12,6 +12,7 @@ from app.api.routes import (
     products,
     retailer_signups,
     shops,
+    support_tickets,
     users,
 )
 
@@ -28,3 +29,4 @@ api_router.include_router(analytics.router)
 api_router.include_router(bulk.router)
 api_router.include_router(retailer_signups.router)
 api_router.include_router(ai.router)
+api_router.include_router(support_tickets.router)

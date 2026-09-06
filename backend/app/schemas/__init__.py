@@ -497,3 +497,27 @@ class AiChatRequest(BaseModel):
 
 class AiChatResponse(BaseModel):
     reply: str
+
+
+class SupportTicketCreate(BaseModel):
+    subject: str = Field(min_length=1, max_length=255)
+    body: str = Field(min_length=1, max_length=5000)
+
+
+class SupportTicketResolve(BaseModel):
+    resolution: str = Field(min_length=1, max_length=5000)
+
+
+class SupportTicketOut(ORMModel):
+    id: UUID
+    created_by: UUID
+    created_by_name: str | None = None
+    created_by_email: str | None = None
+    subject: str
+    body: str
+    status: str
+    resolution: str | None
+    resolved_by: UUID | None
+    resolved_by_name: str | None = None
+    resolved_at: datetime | None
+    created_at: datetime
