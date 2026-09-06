@@ -16,6 +16,7 @@ type BarcodeScanDialogProps = {
 };
 
 const SCANNER_ELEMENT_ID = "cf-barcode-scanner";
+const SCAN_COOLDOWN_MS = 1500;
 
 async function stopHtml5Qrcode(scanner: Html5Qrcode | null) {
   if (!scanner) return;
@@ -37,13 +38,15 @@ async function stopHtml5Qrcode(scanner: Html5Qrcode | null) {
 
 export function BarcodeScanDialog({ open, onOpenChange, onScan }: BarcodeScanDialogProps) {
   const scannerRef = useRef<Html5Qrcode | null>(null);
-  const handledRef = useRef(false);
   const closingRef = useRef(false);
+  const lastScanAtRef = useRef(0);
+  const lastCodeRef = useRef("");
   const onScanRef = useRef(onScan);
   onScanRef.current = onScan;
 
   const [cameraError, setCameraError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  const [lastAdded, setLastAdded] = useState<string | null>(null);
 
   const closeSafely = async () => {
     if (closingRef.current) return;
@@ -54,20 +57,22 @@ export function BarcodeScanDialog({ open, onOpenChange, onScan }: BarcodeScanDia
     await stopHtml5Qrcode(scanner);
     setBusy(false);
     closingRef.current = false;
+    setLastAdded(null);
     onOpenChange(false);
   };
 
   useEffect(() => {
     if (!open) return;
 
-    handledRef.current = false;
     closingRef.current = false;
+    lastScanAtRef.current = 0;
+    lastCodeRef.current = "";
     setCameraError(null);
     setBusy(false);
+    setLastAdded(null);
     let cancelled = false;
 
     const start = async () => {
-      // Let dialog content mount before attaching the scanner
       await new Promise((r) => setTimeout(r, 120));
       if (cancelled) return;
 
@@ -77,7 +82,6 @@ export function BarcodeScanDialog({ open, onOpenChange, onScan }: BarcodeScanDia
         return;
       }
 
-      // Clear leftover markup from a previous open
       el.innerHTML = "";
 
       const scanner = new Html5Qrcode(SCANNER_ELEMENT_ID, {
@@ -101,10 +105,20 @@ export function BarcodeScanDialog({ open, onOpenChange, onScan }: BarcodeScanDia
           { fps: 8, qrbox: { width: 260, height: 140 } },
           (decoded) => {
             const code = decoded.trim();
-            if (!code || handledRef.current || closingRef.current) return;
-            handledRef.current = true;
+            if (!code || closingRef.current) return;
+
+            const now = Date.now();
+            // Ignore rapid repeats of the same code while the camera stays on it
+            if (
+              code === lastCodeRef.current &&
+              now - lastScanAtRef.current < SCAN_COOLDOWN_MS
+            ) {
+              return;
+            }
+            lastCodeRef.current = code;
+            lastScanAtRef.current = now;
+            setLastAdded(code);
             onScanRef.current(code);
-            void closeSafely();
           },
           () => undefined
         );
@@ -131,7 +145,6 @@ export function BarcodeScanDialog({ open, onOpenChange, onScan }: BarcodeScanDia
       scannerRef.current = null;
       void stopHtml5Qrcode(scanner);
     };
-    // closeSafely is stable enough via refs; only re-run on open
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
 
@@ -146,10 +159,9 @@ export function BarcodeScanDialog({ open, onOpenChange, onScan }: BarcodeScanDia
       <DialogContent className="max-w-md overflow-hidden p-0">
         <div className="border-b border-primary/10 bg-gradient-to-r from-primary/15 to-transparent px-6 py-4">
           <DialogHeader>
-            <DialogTitle>Scan barcode</DialogTitle>
+            <DialogTitle>Scan barcodes</DialogTitle>
             <DialogDescription>
-              Point the camera at the product barcode. Bluetooth scanners also work in the product
-              search box.
+              Keep scanning — each code adds a line. Tap Done when finished.
             </DialogDescription>
           </DialogHeader>
         </div>
@@ -164,17 +176,23 @@ export function BarcodeScanDialog({ open, onOpenChange, onScan }: BarcodeScanDia
               className="min-h-[240px] overflow-hidden rounded-xl border border-primary/20 bg-black"
             />
           )}
+          {lastAdded && !cameraError && (
+            <p className="rounded-lg bg-primary/10 px-3 py-2 text-center text-sm font-medium text-primary">
+              Added · {lastAdded}
+            </p>
+          )}
           <p className="text-center text-xs text-muted-foreground">
-            {busy ? "Closing camera…" : "Allow camera access if prompted"}
+            {busy
+              ? "Closing camera…"
+              : "Point at the next barcode, or tap Done to close"}
           </p>
           <Button
             type="button"
-            variant="outline"
             className="h-11 w-full"
             disabled={busy}
             onClick={() => void closeSafely()}
           >
-            {busy ? "Closing…" : "Cancel"}
+            {busy ? "Closing…" : "Done"}
           </Button>
         </div>
       </DialogContent>
