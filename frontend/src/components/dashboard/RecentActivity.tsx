@@ -17,7 +17,6 @@ type RecentInvoice = {
 
 export const RecentActivity = () => {
   const { user } = useAuth();
-  const isAdmin = user?.role === "admin";
 
   const { data: recentInvoices, isLoading } = useQuery({
     queryKey: ["recent-invoices"],
@@ -41,7 +40,7 @@ export const RecentActivity = () => {
   return (
     <Card>
       <CardHeader>
-        <CardTitle>{isAdmin ? "Recent Invoices" : "My Recent Invoices"}</CardTitle>
+        <CardTitle>Recent Invoices</CardTitle>
       </CardHeader>
       <CardContent>
         {isLoading ? (

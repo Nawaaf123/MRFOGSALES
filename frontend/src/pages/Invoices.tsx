@@ -219,13 +219,26 @@ const statusBadgeVariant = (status: PaymentStatus): "default" | "secondary" | "d
   return "destructive";
 };
 
+/** Same calendar day in America/Chicago (matches API same-day edit rule). */
+function isSameBusinessDay(iso: string) {
+  const fmt = new Intl.DateTimeFormat("en-CA", {
+    timeZone: "America/Chicago",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  });
+  return fmt.format(new Date(iso)) === fmt.format(new Date());
+}
+
 const Invoices = () => {
   const { user } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const canCreate = user?.role === "admin" || user?.role === "sales" || user?.role === "srour";
-  const canPickWarehouse = user?.role === "admin" || user?.role === "srour";
+  const canPickWarehouse = user?.role === "admin";
   const isAdmin = user?.role === "admin";
+  const canDeleteInvoice = user?.role === "admin" || user?.role === "srour";
+  const canEditSameDay = canCreate;
 
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
@@ -244,6 +257,8 @@ const Invoices = () => {
   }, [debouncedSearch, statusFilter, shopFilter]);
 
   const [createOpen, setCreateOpen] = useState(false);
+  const [editingInvoiceId, setEditingInvoiceId] = useState<string | null>(null);
+  const [editingInvoiceNumber, setEditingInvoiceNumber] = useState<string | null>(null);
   const clientRequestIdRef = useRef(newClientRequestId());
   const skipNextDraftPersistRef = useRef(false);
   const [shopId, setShopId] = useState("");
@@ -357,7 +372,7 @@ const Invoices = () => {
         throw err;
       }
     },
-    enabled: createOpen,
+    enabled: createOpen || Boolean(editingInvoiceId),
   });
 
   const createCategories = useMemo(() => {
@@ -425,16 +440,16 @@ const Invoices = () => {
   }, [items]);
 
   const { data: profiles = [] } = useQuery({
-    queryKey: ["users", "profiles-for-invoices"],
-    queryFn: () => api<UserProfile[]>("/users"),
-    enabled: isAdmin,
+    queryKey: ["users", "names-for-invoices"],
+    queryFn: () => api<UserProfile[]>("/users/names"),
+    enabled: canCreate,
   });
 
   const profilesForNames = useMemo(() => {
-    if (isAdmin) return profiles;
+    if (profiles.length) return profiles;
     if (user) return [{ id: user.id, full_name: user.full_name }];
     return [];
-  }, [isAdmin, profiles, user]);
+  }, [profiles, user]);
 
   const shopGroups = useMemo(() => {
     const map = new Map<
@@ -512,6 +527,8 @@ const Invoices = () => {
   const resetCreateForm = (opts?: { clearDraft?: boolean }) => {
     skipNextDraftPersistRef.current = true;
     clientRequestIdRef.current = newClientRequestId();
+    setEditingInvoiceId(null);
+    setEditingInvoiceNumber(null);
     setShopId("");
     setNotes("");
     setDiscountAmount("");
@@ -555,6 +572,8 @@ const Invoices = () => {
       const draft = loadInvoiceCreateDraft(user.id);
       if (draftHasWork(draft)) {
         applyDraft(draft!);
+        setEditingInvoiceId(null);
+        setEditingInvoiceNumber(null);
         setCreateOpen(true);
         toast({
           title: "Draft restored",
@@ -567,9 +586,73 @@ const Invoices = () => {
     setCreateOpen(true);
   };
 
+  const canEditInvoiceRow = (inv: { local_sync?: string; created_at: string; invoice_number?: string }) => {
+    if (!canEditSameDay) return false;
+    if (inv.local_sync) return false;
+    // Legacy opening-balance invoices have no editable product lines.
+    if (inv.invoice_number?.startsWith("LEGACY") || inv.invoice_number?.includes("LEGACY")) return false;
+    if (isAdmin) return true;
+    return isSameBusinessDay(inv.created_at);
+  };
+
+  const openEditInvoice = async (inv: { id: string; local_sync?: string; created_at: string; invoice_number: string }) => {
+    if (!canEditInvoiceRow(inv)) {
+      toast({
+        title: "Cannot edit",
+        description: isAdmin
+          ? "This invoice cannot be edited."
+          : "Only invoices created today can be edited.",
+        variant: "destructive",
+      });
+      return;
+    }
+    try {
+      const full = await api<Invoice>(`/invoices/${inv.id}`);
+      if (!full.items?.length) {
+        toast({
+          title: "Cannot edit",
+          description: "This invoice has no line items to edit.",
+          variant: "destructive",
+        });
+        return;
+      }
+      skipNextDraftPersistRef.current = true;
+      setEditingInvoiceId(full.id);
+      setEditingInvoiceNumber(full.invoice_number);
+      setShopId(full.shop_id);
+      setNotes(full.notes || "");
+      setDiscountAmount(full.discount_amount ? String(full.discount_amount) : "");
+      setWarehouse((full.warehouse as "A" | "B") || user?.assigned_warehouse || "A");
+      setItems(
+        full.items.map((item) => ({
+          product_id: item.product_id,
+          product_name: item.product_name,
+          product_sku: null,
+          quantity: item.quantity,
+          unit_price: Number(item.unit_price),
+          subtotal: Number(item.subtotal),
+        }))
+      );
+      setCashAmount("");
+      setCheckAmount("");
+      setCreditAmount("");
+      setProductSearch("");
+      setCreateCategoryFilter("all");
+      setCreateSubcategoryFilter("all");
+      setCreateOpen(true);
+    } catch (error: unknown) {
+      const message =
+        error && typeof error === "object" && "message" in error
+          ? String((error as ApiError).message)
+          : "Could not load invoice";
+      toast({ title: "Error", description: message, variant: "destructive" });
+    }
+  };
+
   // Keep draft on device while sales build the invoice (survives refresh / weak signal).
   useEffect(() => {
     if (!user?.id) return;
+    if (editingInvoiceId) return;
     if (skipNextDraftPersistRef.current) {
       skipNextDraftPersistRef.current = false;
       return;
@@ -598,6 +681,7 @@ const Invoices = () => {
   }, [
     user?.id,
     createOpen,
+    editingInvoiceId,
     shopId,
     notes,
     discountAmount,
@@ -893,6 +977,40 @@ const Invoices = () => {
       setCreateOpen(false);
       resetCreateForm({ clearDraft: true });
       toast({ title: "Invoice created" });
+    },
+    onError: (error: ApiError) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const updateMutation = useMutation({
+    mutationFn: async () => {
+      if (!editingInvoiceId) throw { message: "No invoice selected" } satisfies ApiError;
+      if (items.length === 0) throw { message: "Add at least one product" } satisfies ApiError;
+      return api<Invoice>(`/invoices/${editingInvoiceId}`, {
+        method: "PATCH",
+        body: JSON.stringify({
+          items: items
+            .filter((item) => isValidUuid(item.product_id))
+            .map((item) => ({
+              product_id: item.product_id,
+              product_name: item.product_name,
+              quantity: item.quantity,
+              unit_price: item.unit_price,
+              subtotal: item.subtotal,
+            })),
+          discount_amount: discount,
+          notes: notes.trim() || null,
+        }),
+      });
+    },
+    onSuccess: () => {
+      queryClient.invalidateQueries({ queryKey: ["invoices"] });
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
+      setCreateOpen(false);
+      resetCreateForm({ clearDraft: false });
+      toast({ title: "Invoice updated" });
     },
     onError: (error: ApiError) => {
       toast({ title: "Error", description: error.message, variant: "destructive" });
@@ -1366,6 +1484,9 @@ const Invoices = () => {
                   const row = invoices.find((i) => i.id === inv.id) || null;
                   setDeleteInvoice(row);
                 }}
+                onEditInvoice={(inv) => {
+                  void openEditInvoice(inv);
+                }}
                 onRetryLocalSync={(inv) => void handleRetryLocalSync(inv)}
                 onDiscardLocalSync={handleDiscardLocalSync}
                 onDistributePayment={(shopId, shopName, pendingInvs, totalPending) => {
@@ -1380,7 +1501,8 @@ const Invoices = () => {
                   });
                 }}
                 canManage={canCreate}
-                isAdmin={isAdmin}
+                canDelete={canDeleteInvoice}
+                canEditInvoice={(inv) => canEditInvoiceRow(inv)}
                 profiles={profilesForNames}
                 onRefetch={refetchInvoices}
               />
@@ -1400,6 +1522,10 @@ const Invoices = () => {
         open={createOpen}
         onOpenChange={(next) => {
           setCreateOpen(next);
+          if (!next && editingInvoiceId) {
+            setEditingInvoiceId(null);
+            setEditingInvoiceNumber(null);
+          }
           // Closing keeps the on-device draft; only success / explicit new form clears it.
         }}
       >
@@ -1408,7 +1534,9 @@ const Invoices = () => {
             <DialogHeader>
               <DialogTitle className="flex items-center gap-2 text-xl">
                 <FileText className="h-5 w-5 text-primary" />
-                Create Invoice
+                {editingInvoiceId
+                  ? `Edit Invoice${editingInvoiceNumber ? ` · ${editingInvoiceNumber}` : ""}`
+                  : "Create Invoice"}
               </DialogTitle>
             </DialogHeader>
           </div>
@@ -1416,7 +1544,7 @@ const Invoices = () => {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-2 min-w-0">
                 <Label>Shop *</Label>
-                <Select value={shopId} onValueChange={setShopId}>
+                <Select value={shopId} onValueChange={setShopId} disabled={Boolean(editingInvoiceId)}>
                   <SelectTrigger className="w-full">
                     <SelectValue placeholder="Select shop" />
                   </SelectTrigger>
@@ -1434,7 +1562,7 @@ const Invoices = () => {
                 <Select
                   value={warehouse}
                   onValueChange={(v) => setWarehouse(v as "A" | "B")}
-                  disabled={!canPickWarehouse}
+                  disabled={!canPickWarehouse || Boolean(editingInvoiceId)}
                 >
                   <SelectTrigger className="w-full">
                     <SelectValue />
@@ -1447,6 +1575,7 @@ const Invoices = () => {
               </div>
             </div>
 
+            {!editingInvoiceId && (
             <div className="flex flex-col sm:flex-row sm:items-center gap-2">
               <Button
                 type="button"
@@ -1462,6 +1591,7 @@ const Invoices = () => {
                 Uses this shop’s recent invoices to prefill products (you can edit).
               </p>
             </div>
+            )}
 
             <div className="space-y-3 rounded-md border p-3 min-w-0">
               <div className="flex flex-col gap-0.5">
@@ -1832,6 +1962,7 @@ const Invoices = () => {
               </div>
             </div>
 
+            {!editingInvoiceId && (
             <div className="rounded-md border p-3 space-y-3 min-w-0">
               <p className="text-sm font-medium">Optional payments on create</p>
               <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -1867,11 +1998,12 @@ const Invoices = () => {
                 </div>
               </div>
             </div>
+            )}
 
             <div className="flex flex-col gap-2 sm:flex-row sm:items-center sm:justify-between text-sm border-t pt-3">
               <div className="space-y-1 text-muted-foreground">
                 <div>Subtotal: ${subtotal.toFixed(2)}</div>
-                <div>Payments: ${createPaymentsTotal.toFixed(2)}</div>
+                {!editingInvoiceId && <div>Payments: ${createPaymentsTotal.toFixed(2)}</div>}
               </div>
               <div className="sm:text-right">
                 <div className="text-muted-foreground">Invoice total</div>
@@ -1880,12 +2012,12 @@ const Invoices = () => {
             </div>
 
             <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2 sticky bottom-0 bg-background pt-2 pb-1">
-              {(shopId || items.length > 0 || notes.trim()) && (
+              {!editingInvoiceId && (shopId || items.length > 0 || notes.trim()) && (
                 <Button
                   type="button"
                   variant="ghost"
                   className="w-full sm:w-auto h-11 text-destructive"
-                  disabled={createMutation.isPending}
+                  disabled={createMutation.isPending || updateMutation.isPending}
                   onClick={() => {
                     resetCreateForm({ clearDraft: true });
                     toast({ title: "Draft discarded" });
@@ -1894,18 +2026,39 @@ const Invoices = () => {
                   Discard draft
                 </Button>
               )}
-              <Button variant="outline" className="w-full sm:w-auto h-11" onClick={() => setCreateOpen(false)}>
+              <Button
+                variant="outline"
+                className="w-full sm:w-auto h-11"
+                onClick={() => setCreateOpen(false)}
+                disabled={createMutation.isPending || updateMutation.isPending}
+              >
                 Cancel
               </Button>
               <Button
                 className="w-full sm:w-auto h-11"
-                disabled={!shopId || items.length === 0 || createMutation.isPending}
+                disabled={
+                  !shopId ||
+                  items.length === 0 ||
+                  createMutation.isPending ||
+                  updateMutation.isPending
+                }
                 onClick={() => {
+                  if (editingInvoiceId) {
+                    if (updateMutation.isPending) return;
+                    updateMutation.mutate();
+                    return;
+                  }
                   if (createMutation.isPending) return;
                   createMutation.mutate();
                 }}
               >
-                {createMutation.isPending ? "Saving…" : "Create Invoice"}
+                {editingInvoiceId
+                  ? updateMutation.isPending
+                    ? "Saving…"
+                    : "Update Invoice"
+                  : createMutation.isPending
+                    ? "Saving…"
+                    : "Create Invoice"}
               </Button>
             </div>
           </div>

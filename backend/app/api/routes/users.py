@@ -8,9 +8,24 @@ from app.api.routes.auth import serialize_user
 from app.core.security import hash_password
 from app.db.session import get_db
 from app.models import AppRole, User, UserRole
-from app.schemas import SignUpRequest, UserPublic, UserUpdate
+from app.schemas import SignUpRequest, UserNamePublic, UserPublic, UserUpdate
 
 router = APIRouter(prefix="/users", tags=["users"])
+
+
+@router.get("/names", response_model=list[UserNamePublic])
+def list_user_names(
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles(AppRole.admin, AppRole.sales, AppRole.srour)),
+) -> list[UserNamePublic]:
+    """Lightweight directory so staff can show invoice creator names."""
+    users = (
+        db.query(User.id, User.full_name)
+        .filter(User.is_active.is_(True))
+        .order_by(User.full_name.asc())
+        .all()
+    )
+    return [UserNamePublic(id=row.id, full_name=row.full_name) for row in users]
 
 
 @router.get("", response_model=list[UserPublic])

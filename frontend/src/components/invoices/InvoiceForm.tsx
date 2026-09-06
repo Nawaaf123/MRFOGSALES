@@ -134,7 +134,7 @@ export const InvoiceForm = ({ invoice, onSuccess, onCancel, onBusyChange }: Invo
     }
   }, [userMeta?.assigned_warehouse, invoice?.id]);
 
-  const canPickWarehouse = userMeta?.role === "admin" || userMeta?.role === "srour";
+  const canPickWarehouse = userMeta?.role === "admin";
 
   useEffect(() => {
     if (invoice?.id) {

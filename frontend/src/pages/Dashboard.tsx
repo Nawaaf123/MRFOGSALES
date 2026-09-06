@@ -9,7 +9,6 @@ import {
   DollarSign,
   Percent,
   AlertCircle,
-  Map as MapIcon,
   LayoutDashboard,
 } from "lucide-react";
 import { StatsCard } from "@/components/dashboard/StatsCard";
@@ -20,7 +19,6 @@ import { TopShops } from "@/components/dashboard/TopShops";
 import { RecentActivity } from "@/components/dashboard/RecentActivity";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { PageHero } from "@/components/ui/PageHero";
-import { DeferredLocationsMap } from "@/components/location/DeferredLocationsMap";
 
 type DashboardStats = {
   products_count: number;
@@ -172,23 +170,6 @@ const Dashboard = () => {
           <TopShops />
           <RecentActivity />
         </div>
-      )}
-
-      {isAdmin && (
-        <section className="overflow-hidden rounded-2xl border border-primary/15 bg-card">
-          <div className="border-b border-primary/10 bg-gradient-to-r from-primary/[0.08] to-transparent px-4 py-4 sm:px-5">
-            <h2 className="flex items-center gap-2 text-lg font-semibold">
-              <MapIcon className="h-5 w-5 text-primary" />
-              Locations map
-            </h2>
-            <p className="text-sm text-muted-foreground">
-              Red markers show shop locations
-            </p>
-          </div>
-          <div className="p-2 sm:p-3">
-            <DeferredLocationsMap heightClassName="h-[280px] md:h-[420px]" />
-          </div>
-        </section>
       )}
     </div>
   );

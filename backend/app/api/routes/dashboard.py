@@ -26,7 +26,7 @@ def dashboard_stats(
         .join(Shop, Invoice.shop_id == Shop.id)
         .filter(Shop.is_frozen.is_(False))
     )
-    if role != AppRole.admin:
+    if role not in (AppRole.admin, AppRole.sales, AppRole.srour):
         invoices_query = invoices_query.filter(Invoice.created_by == current_user.id)
 
     invoices_count = invoices_query.with_entities(func.count(Invoice.id)).scalar() or 0
@@ -110,7 +110,7 @@ def recent_invoices(
         .join(Shop, Invoice.shop_id == Shop.id)
         .filter(Shop.is_frozen.is_(False))
     )
-    if role != AppRole.admin:
+    if role not in (AppRole.admin, AppRole.sales, AppRole.srour):
         query = query.filter(Invoice.created_by == current_user.id)
     query = query.order_by(Invoice.created_at.desc()).limit(5)
     return [serialize_invoice(inv, db) for inv in query.all()]
@@ -134,7 +134,7 @@ def pending_payments(
             Invoice.payment_status.in_([PaymentStatus.unpaid, PaymentStatus.partial]),
         )
     )
-    if role != AppRole.admin:
+    if role not in (AppRole.admin, AppRole.sales, AppRole.srour):
         query = query.filter(Invoice.created_by == current_user.id)
     invoices = query.order_by(Invoice.created_at.desc()).limit(8).all()
     paid_map = paid_amounts_for_invoices(db, [inv.id for inv in invoices])

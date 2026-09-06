@@ -10,6 +10,7 @@ import {
   Mail,
   Loader2,
   RefreshCw,
+  Pencil,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -50,6 +51,7 @@ interface ShopInvoiceGroupProps {
   onSendEmail: (invoice: ShopGroupInvoice) => void;
   sendingEmailId: string | null;
   onDeleteInvoice: (invoice: ShopGroupInvoice) => void;
+  onEditInvoice?: (invoice: ShopGroupInvoice) => void;
   onRetryLocalSync?: (invoice: ShopGroupInvoice) => void;
   onDiscardLocalSync?: (invoice: ShopGroupInvoice) => void;
   onDistributePayment: (
@@ -59,7 +61,8 @@ interface ShopInvoiceGroupProps {
     totalPending: number
   ) => void;
   canManage: boolean;
-  isAdmin: boolean;
+  canDelete: boolean;
+  canEditInvoice?: (invoice: ShopGroupInvoice) => boolean;
   profiles?: { id: string; full_name: string }[];
   onRefetch?: () => void;
 }
@@ -79,11 +82,13 @@ export const ShopInvoiceGroup = ({
   onSendEmail,
   sendingEmailId,
   onDeleteInvoice,
+  onEditInvoice,
   onRetryLocalSync,
   onDiscardLocalSync,
   onDistributePayment,
   canManage,
-  isAdmin,
+  canDelete,
+  canEditInvoice,
   profiles,
   onRefetch,
 }: ShopInvoiceGroupProps) => {
@@ -143,6 +148,7 @@ export const ShopInvoiceGroup = ({
     const variant = outline ? "outline" : "ghost";
     const pending = pendingOf(invoice);
     const btnClass = outline ? "h-10 min-w-10 flex-1 sm:flex-none" : "h-8 w-8 p-0";
+    const showEdit = Boolean(canEditInvoice?.(invoice) && onEditInvoice);
 
     if (invoice.local_sync) {
       return (
@@ -190,6 +196,18 @@ export const ShopInvoiceGroup = ({
           <Eye className="h-4 w-4" />
           {outline && <span className="ml-1 sm:hidden text-xs">View</span>}
         </Button>
+        {showEdit && (
+          <Button
+            variant={variant}
+            size="sm"
+            className={btnClass}
+            onClick={() => onEditInvoice?.(invoice)}
+            title="Edit line items"
+          >
+            <Pencil className="h-4 w-4" />
+            {outline && <span className="ml-1 sm:hidden text-xs">Edit</span>}
+          </Button>
+        )}
         {canManage && pending > 0.01 && (
           <Button
             variant={variant}
@@ -229,7 +247,7 @@ export const ShopInvoiceGroup = ({
             {outline && <span className="ml-1 sm:hidden text-xs">Email</span>}
           </Button>
         )}
-        {isAdmin && (
+        {canDelete && (
           <Button
             variant={variant}
             size="sm"

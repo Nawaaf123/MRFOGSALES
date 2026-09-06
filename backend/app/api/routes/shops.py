@@ -77,9 +77,9 @@ def list_shops(
 @router.get("/map", response_model=list[ShopBrief])
 def list_shops_for_map(
     db: Session = Depends(get_db),
-    _: User = Depends(get_current_user),
+    _: User = Depends(require_roles(AppRole.admin)),
 ) -> list[ShopBrief]:
-    """Lightweight pin payload — only fields the map needs."""
+    """Lightweight pin payload — only fields the map needs. Admin only."""
     rows = (
         db.query(Shop)
         .filter(
@@ -154,7 +154,7 @@ def geocode_missing_shops(
 def create_shop(
     payload: ShopCreate,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles(AppRole.admin, AppRole.sales)),
+    current_user: User = Depends(require_roles(AppRole.admin, AppRole.sales, AppRole.srour)),
 ) -> Shop:
     shop = Shop(**payload.model_dump(), created_by=current_user.id)
     apply_geocode_if_needed(shop)
@@ -181,7 +181,7 @@ def update_shop(
     shop_id: UUID,
     payload: ShopUpdate,
     db: Session = Depends(get_db),
-    _: User = Depends(require_roles(AppRole.admin, AppRole.sales)),
+    _: User = Depends(require_roles(AppRole.admin, AppRole.sales, AppRole.srour)),
 ) -> Shop:
     shop = db.query(Shop).filter(Shop.id == shop_id).first()
     if not shop:

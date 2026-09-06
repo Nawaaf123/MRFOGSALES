@@ -138,8 +138,9 @@ const Products = () => {
   const { user } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const canManage = user?.role === "admin" || user?.role === "sales";
+  const canManage = user?.role === "admin" || user?.role === "srour";
   const isAdmin = user?.role === "admin";
+  const canBulkImport = isAdmin;
 
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
@@ -305,10 +306,12 @@ const Products = () => {
           action={
             canManage ? (
               <div className="flex w-full flex-col flex-wrap gap-2 sm:w-auto sm:flex-row">
-                <BulkProductUploadDialog
-                  categoryFilter={categoryFilter}
-                  subcategoryFilter={subcategoryFilter}
-                />
+                {canBulkImport && (
+                  <BulkProductUploadDialog
+                    categoryFilter={categoryFilter}
+                    subcategoryFilter={subcategoryFilter}
+                  />
+                )}
                 <Button className="h-11 w-full shadow-sm shadow-primary/25 sm:w-auto" onClick={openCreate}>
                   <Plus className="mr-2 h-4 w-4" />
                   Add Product

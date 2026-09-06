@@ -123,8 +123,9 @@ const Shops = () => {
   const { user } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const canManage = user?.role === "admin" || user?.role === "sales";
+  const canManage = user?.role === "admin" || user?.role === "sales" || user?.role === "srour";
   const isAdmin = user?.role === "admin";
+  const canBulkImport = isAdmin;
 
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
@@ -293,14 +294,16 @@ const Shops = () => {
                     {geocodeMutation.isPending ? "Geocoding..." : "Geocode"}
                   </Button>
                 )}
-                <Button
-                  variant="outline"
-                  className="h-11 w-full border-primary/25 sm:w-auto"
-                  onClick={() => setBulkOpen(true)}
-                >
-                  <Upload className="mr-2 h-4 w-4" />
-                  Bulk Import
-                </Button>
+                {canBulkImport && (
+                  <Button
+                    variant="outline"
+                    className="h-11 w-full border-primary/25 sm:w-auto"
+                    onClick={() => setBulkOpen(true)}
+                  >
+                    <Upload className="mr-2 h-4 w-4" />
+                    Bulk Import
+                  </Button>
+                )}
                 <Button className="h-11 w-full shadow-sm shadow-primary/25 sm:w-auto" onClick={openCreate}>
                   <Plus className="mr-2 h-4 w-4" />
                   Add Shop
@@ -327,13 +330,15 @@ const Shops = () => {
           className="h-11 w-full max-w-md"
         />
 
-        <div className="space-y-2">
-          <h2 className="text-lg font-semibold">Shop map</h2>
-          <p className="text-sm text-muted-foreground">
-            Red markers show shops with geocoded addresses
-          </p>
-          <DeferredLocationsMap heightClassName="h-[320px] md:h-[420px]" pollSales={false} />
-        </div>
+        {isAdmin && (
+          <div className="space-y-2">
+            <h2 className="text-lg font-semibold">Shop map</h2>
+            <p className="text-sm text-muted-foreground">
+              Red markers show shops with geocoded addresses
+            </p>
+            <DeferredLocationsMap heightClassName="h-[320px] md:h-[420px]" pollSales={false} />
+          </div>
+        )}
 
         <BulkUploadDialog
           open={bulkOpen}
