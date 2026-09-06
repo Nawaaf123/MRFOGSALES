@@ -1,4 +1,4 @@
-import { useMemo, useState, lazy, Suspense } from "react";
+import { useEffect, useMemo, useState, lazy, Suspense } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,6 +20,12 @@ import {
 } from "@/components/ui/table";
 import { useAuth } from "@/lib/auth";
 import { api, ApiError } from "@/lib/api";
+import {
+  buildPageParams,
+  DEFAULT_PAGE_SIZE,
+  type Paginated,
+} from "@/lib/pagination";
+import { ListPaginationBar } from "@/components/ui/ListPaginationBar";
 import { useToast } from "@/hooks/use-toast";
 import { BulkUploadDialog } from "@/components/shops/BulkUploadDialog";
 import { PageHero } from "@/components/ui/PageHero";
@@ -125,37 +131,50 @@ const Shops = () => {
   const isAdmin = user?.role === "admin";
 
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState<"all" | "active" | "frozen">("all");
   const [open, setOpen] = useState(false);
   const [bulkOpen, setBulkOpen] = useState(false);
   const [editing, setEditing] = useState<Shop | null>(null);
   const [form, setForm] = useState<ShopFormState>(emptyForm);
+  const [page, setPage] = useState(1);
+  const pageSize = DEFAULT_PAGE_SIZE;
 
-  const { data: shops = [], isLoading } = useQuery({
-    queryKey: ["shops", "include_frozen"],
-    queryFn: () => api<Shop[]>("/shops?include_frozen=true"),
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedSearch(search.trim()), 300);
+    return () => window.clearTimeout(timer);
+  }, [search]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [debouncedSearch, statusFilter]);
+
+  const listParams = useMemo(
+    () =>
+      buildPageParams({
+        include_frozen: true,
+        frozen: statusFilter === "frozen" ? true : statusFilter === "active" ? false : undefined,
+        search: debouncedSearch || undefined,
+        page,
+        page_size: pageSize,
+      }),
+    [debouncedSearch, statusFilter, page, pageSize]
+  );
+
+  const { data: shopPage, isLoading } = useQuery({
+    queryKey: ["shops", "include_frozen", listParams],
+    queryFn: () =>
+      api<Paginated<Shop> & { active_count?: number; frozen_count?: number }>(
+        `/shops${listParams}`
+      ),
     staleTime: 2 * 60_000,
   });
 
-  const filtered = useMemo(() => {
-    let list = shops;
-    if (statusFilter === "active") list = list.filter((s) => !s.is_frozen);
-    if (statusFilter === "frozen") list = list.filter((s) => s.is_frozen);
-    const q = search.trim().toLowerCase();
-    if (!q) return list;
-    return list.filter(
-      (s) =>
-        s.name.toLowerCase().includes(q) ||
-        (s.owner_name || "").toLowerCase().includes(q) ||
-        (s.phone || "").toLowerCase().includes(q) ||
-        (s.email || "").toLowerCase().includes(q) ||
-        (s.city || "").toLowerCase().includes(q) ||
-        (s.state || "").toLowerCase().includes(q)
-    );
-  }, [shops, search, statusFilter]);
-
-  const activeCount = shops.filter((s) => !s.is_frozen).length;
-  const frozenCount = shops.filter((s) => s.is_frozen).length;
+  const shops = shopPage?.items ?? [];
+  const shopTotal = shopPage?.total ?? 0;
+  const activeCount = shopPage?.active_count ?? 0;
+  const frozenCount = shopPage?.frozen_count ?? 0;
+  const catalogTotal = activeCount + frozenCount;
 
   const saveMutation = useMutation({
     mutationFn: () => {
@@ -260,7 +279,7 @@ const Shops = () => {
           title="Shops"
           description="Retail accounts and customer contacts"
           stats={[
-            { label: "Total", value: shops.length, accent: true },
+            { label: "Total", value: catalogTotal, accent: true },
             { label: "Active", value: activeCount },
             { label: "Frozen", value: frozenCount },
           ]}
@@ -299,7 +318,7 @@ const Shops = () => {
           value={statusFilter}
           onChange={(id) => setStatusFilter(id as "all" | "active" | "frozen")}
           items={[
-            { id: "all", label: "All", count: shops.length },
+            { id: "all", label: "All", count: catalogTotal },
             { id: "active", label: "Active", count: activeCount },
             { id: "frozen", label: "Frozen", count: frozenCount },
           ]}
@@ -345,10 +364,10 @@ const Shops = () => {
                 <div key={i} className="h-28 animate-pulse rounded-xl bg-muted" />
               ))}
             </div>
-          ) : filtered.length === 0 ? (
+          ) : shops.length === 0 ? (
             <EmptyState icon={ShoppingBag} title="No shops found" description="Try another search or status filter" />
           ) : (
-            filtered.map((shop) => (
+            shops.map((shop) => (
               <div
                 key={shop.id}
                 className={cn(
@@ -457,12 +476,12 @@ const Shops = () => {
                 <TableRow>
                   <TableCell colSpan={canManage ? 6 : 5}>Loading...</TableCell>
                 </TableRow>
-              ) : filtered.length === 0 ? (
+              ) : shops.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={canManage ? 6 : 5}>No shops found</TableCell>
                 </TableRow>
               ) : (
-                filtered.map((shop) => (
+                shops.map((shop) => (
                   <TableRow key={shop.id} className={shop.is_frozen ? "opacity-70" : undefined}>
                     <TableCell className="font-medium">
                       <div className="flex items-center gap-2 flex-wrap">
@@ -541,6 +560,12 @@ const Shops = () => {
             </TableBody>
           </Table>
         </div>
+        <ListPaginationBar
+          page={page}
+          pageSize={pageSize}
+          total={shopTotal}
+          onPageChange={setPage}
+        />
       </div>
 
       <Dialog

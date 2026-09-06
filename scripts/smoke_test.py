@@ -221,7 +221,15 @@ def main() -> int:
     check("top products", r.status_code == 200, r.text)
 
     # List endpoints used by UI
-    for path in ["/shops", "/products", "/invoices", "/orders", "/users"]:
+    for path in ["/shops", "/products", "/invoices"]:
+        r = client.get(f"{API}{path}?page=1&page_size=10", headers=headers)
+        body = r.json() if r.status_code == 200 else {}
+        check(
+            f"list {path}",
+            r.status_code == 200 and isinstance(body.get("items"), list) and "total" in body,
+            r.text,
+        )
+    for path in ["/orders", "/users"]:
         r = client.get(f"{API}{path}", headers=headers)
         check(f"list {path}", r.status_code == 200, r.text)
 

@@ -3,6 +3,7 @@ import mapboxgl from "mapbox-gl";
 import type { GeoJSONSource } from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
 import { api } from "@/lib/api";
+import { fetchAllPages } from "@/lib/pagination";
 import { Card } from "@/components/ui/card";
 import { Loader2 } from "lucide-react";
 
@@ -294,7 +295,8 @@ export const LocationsMap = ({
       try {
         return await api<ShopPin[]>("/shops/map", { timeoutMs: 45_000 });
       } catch {
-        return await api<ShopPin[]>("/shops?with_coords_only=true", {
+        return await fetchAllPages<ShopPin>("/shops", {
+          extraParams: { with_coords_only: true },
           timeoutMs: 45_000,
         });
       }

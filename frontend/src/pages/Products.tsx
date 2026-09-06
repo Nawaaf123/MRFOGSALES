@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -39,6 +39,12 @@ import {
 } from "@/components/ui/command";
 import { useAuth } from "@/lib/auth";
 import { api, ApiError } from "@/lib/api";
+import {
+  buildPageParams,
+  DEFAULT_PAGE_SIZE,
+  type Paginated,
+} from "@/lib/pagination";
+import { ListPaginationBar } from "@/components/ui/ListPaginationBar";
 import { useToast } from "@/hooks/use-toast";
 import { BulkProductUploadDialog } from "@/components/products/BulkProductUploadDialog";
 import { PageHero } from "@/components/ui/PageHero";
@@ -128,10 +134,6 @@ function formPayload(form: ProductFormState) {
   };
 }
 
-function skuSortKey(sku: string | null | undefined) {
-  return (sku || "").trim().toLowerCase();
-}
-
 const Products = () => {
   const { user } = useAuth();
   const { toast } = useToast();
@@ -140,6 +142,7 @@ const Products = () => {
   const isAdmin = user?.role === "admin";
 
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
   const [subcategoryFilter, setSubcategoryFilter] = useState("all");
   const [skuSortAsc, setSkuSortAsc] = useState(true);
@@ -149,60 +152,63 @@ const Products = () => {
   const [editing, setEditing] = useState<Product | null>(null);
   const [form, setForm] = useState<ProductFormState>(emptyForm);
   const [deactivateId, setDeactivateId] = useState<string | null>(null);
+  const [page, setPage] = useState(1);
+  const pageSize = DEFAULT_PAGE_SIZE;
 
-  const { data: products = [], isLoading } = useQuery({
-    queryKey: ["products"],
-    queryFn: () => api<Product[]>("/products"),
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedSearch(search.trim()), 300);
+    return () => window.clearTimeout(timer);
+  }, [search]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [debouncedSearch, categoryFilter, subcategoryFilter, skuSortAsc]);
+
+  const canShowProductList = categoryFilter !== "all" || debouncedSearch.length >= 2;
+
+  const listParams = useMemo(
+    () =>
+      buildPageParams({
+        search: debouncedSearch || undefined,
+        category: categoryFilter !== "all" ? categoryFilter : undefined,
+        subcategory: subcategoryFilter !== "all" ? subcategoryFilter : undefined,
+        sort: skuSortAsc ? "sku_asc" : "sku_desc",
+        page: canShowProductList ? page : 1,
+        page_size: canShowProductList ? pageSize : 1,
+      }),
+    [
+      debouncedSearch,
+      categoryFilter,
+      subcategoryFilter,
+      skuSortAsc,
+      page,
+      pageSize,
+      canShowProductList,
+    ]
+  );
+
+  const { data: productPage, isLoading } = useQuery({
+    queryKey: ["products", listParams],
+    queryFn: () =>
+      api<
+        Paginated<Product> & {
+          categories?: string[];
+          subcategories?: string[];
+          catalog_total?: number;
+          active_count?: number;
+          low_stock_count?: number;
+        }
+      >(`/products${listParams}`),
     staleTime: 2 * 60_000,
   });
 
-  const categories = useMemo(() => {
-    return Array.from(new Set(products.map((p) => p.category).filter(Boolean))).sort((a, b) =>
-      a.localeCompare(b)
-    );
-  }, [products]);
-
-  const subcategories = useMemo(() => {
-    const pool =
-      categoryFilter === "all"
-        ? products
-        : products.filter((p) => p.category === categoryFilter);
-    return Array.from(
-      new Set(pool.map((p) => p.subcategory).filter((s): s is string => Boolean(s)))
-    ).sort((a, b) => a.localeCompare(b));
-  }, [products, categoryFilter]);
-
-  const canShowProductList = categoryFilter !== "all" || search.trim().length >= 2;
-
-  const filtered = useMemo(() => {
-    if (!canShowProductList) return [];
-    const q = search.trim().toLowerCase();
-    const rows = products.filter((p) => {
-      if (categoryFilter !== "all" && p.category !== categoryFilter) return false;
-      if (subcategoryFilter !== "all" && (p.subcategory || "") !== subcategoryFilter) return false;
-      if (!q) return true;
-      return (
-        p.name.toLowerCase().includes(q) ||
-        (p.sku || "").toLowerCase().includes(q) ||
-        (p.barcode || "").toLowerCase().includes(q) ||
-        p.category.toLowerCase().includes(q) ||
-        (p.subcategory || "").toLowerCase().includes(q) ||
-        (p.sub_subcategory || "").toLowerCase().includes(q)
-      );
-    });
-
-    const dir = skuSortAsc ? 1 : -1;
-    return [...rows].sort((a, b) => {
-      const sa = skuSortKey(a.sku);
-      const sb = skuSortKey(b.sku);
-      if (!sa && !sb) return a.name.localeCompare(b.name) * dir;
-      if (!sa) return 1;
-      if (!sb) return -1;
-      const cmp = sa.localeCompare(sb, undefined, { numeric: true, sensitivity: "base" });
-      if (cmp !== 0) return cmp * dir;
-      return a.name.localeCompare(b.name) * dir;
-    });
-  }, [products, search, categoryFilter, subcategoryFilter, skuSortAsc, canShowProductList]);
+  const products = canShowProductList ? productPage?.items ?? [] : [];
+  const categories = productPage?.categories ?? [];
+  const subcategories = productPage?.subcategories ?? [];
+  const productTotal = canShowProductList ? productPage?.total ?? 0 : 0;
+  const catalogTotal = productPage?.catalog_total ?? 0;
+  const activeCount = productPage?.active_count ?? 0;
+  const lowStockCount = productPage?.low_stock_count ?? 0;
 
   const saveMutation = useMutation({
     mutationFn: () => {
@@ -284,12 +290,6 @@ const Products = () => {
     setSubcategoryOpen(false);
   };
 
-  const activeCount = products.filter((p) => p.is_active).length;
-  const lowStockCount = products.filter((p) => {
-    const total = Number(p.stock_quantity || 0) + Number(p.stock_quantity_b || 0);
-    return p.is_active && total <= Number(p.low_stock_threshold || 0);
-  }).length;
-
   return (
     <>
       <div className="space-y-4">
@@ -298,7 +298,7 @@ const Products = () => {
           title="Products"
           description="Catalog, SKUs, and warehouse stock for A & B"
           stats={[
-            { label: "Total", value: products.length, accent: true },
+            { label: "Total", value: catalogTotal, accent: true },
             { label: "Active", value: activeCount },
             { label: "Low stock", value: lowStockCount },
           ]}
@@ -460,7 +460,7 @@ const Products = () => {
 
         <p className="text-xs text-muted-foreground">
           {canShowProductList
-            ? `Showing ${filtered.length} product${filtered.length === 1 ? "" : "s"}, sorted by SKU ${
+            ? `Showing ${products.length} of ${productTotal} product${productTotal === 1 ? "" : "s"}, sorted by SKU ${
                 skuSortAsc ? "ascending" : "descending"
               }`
             : "Pick a category or type at least 2 characters to list products"}
@@ -478,10 +478,10 @@ const Products = () => {
         <div className="md:hidden space-y-3">
           {isLoading ? (
             <p className="text-sm text-muted-foreground py-8 text-center">Loading...</p>
-          ) : filtered.length === 0 ? (
+          ) : products.length === 0 ? (
             <p className="text-sm text-muted-foreground py-8 text-center">No products found</p>
           ) : (
-            filtered.map((product) => {
+            products.map((product) => {
               const lowStock =
                 product.stock_quantity + product.stock_quantity_b <= product.low_stock_threshold;
               return (
@@ -595,12 +595,12 @@ const Products = () => {
                 <TableRow>
                   <TableCell colSpan={canManage ? 9 : 8}>Loading...</TableCell>
                 </TableRow>
-              ) : filtered.length === 0 ? (
+              ) : products.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={canManage ? 9 : 8}>No products found</TableCell>
                 </TableRow>
               ) : (
-                filtered.map((product) => {
+                products.map((product) => {
                   const lowStock =
                     product.stock_quantity + product.stock_quantity_b <= product.low_stock_threshold;
                   return (
@@ -675,6 +675,12 @@ const Products = () => {
             </TableBody>
           </Table>
         </div>
+        <ListPaginationBar
+          page={page}
+          pageSize={pageSize}
+          total={productTotal}
+          onPageChange={setPage}
+        />
         </>
         )}
       </div>

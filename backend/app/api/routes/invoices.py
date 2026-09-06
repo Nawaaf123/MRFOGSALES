@@ -25,6 +25,7 @@ from app.schemas import (
     InvoiceCreate,
     InvoiceEmailRequest,
     InvoiceListOut,
+    InvoiceListPage,
     InvoiceOut,
     LegacyBalanceCreate,
     PaymentCreate,
@@ -144,16 +145,18 @@ def load_invoice(db: Session, invoice_id: UUID) -> Invoice | None:
     )
 
 
-@router.get("/invoices", response_model=list[InvoiceListOut])
+@router.get("/invoices", response_model=InvoiceListPage)
 def list_invoices(
     search: str | None = Query(default=None),
     payment_status: PaymentStatus | None = Query(default=None),
     shop_id: UUID | None = Query(default=None),
     date_from: datetime | None = Query(default=None),
     date_to: datetime | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
-) -> list[InvoiceListOut]:
+) -> InvoiceListPage:
     query = (
         db.query(Invoice)
         .options(joinedload(Invoice.shop))
@@ -184,9 +187,20 @@ def list_invoices(
             )
         )
 
-    invoices = query.order_by(Invoice.created_at.desc()).all()
+    total = query.order_by(None).count()
+    invoices = (
+        query.order_by(Invoice.created_at.desc())
+        .offset((page - 1) * page_size)
+        .limit(page_size)
+        .all()
+    )
     paid_map = paid_amounts_for_invoices(db, [inv.id for inv in invoices])
-    return [serialize_invoice_list_row(inv, paid_map.get(inv.id, 0.0)) for inv in invoices]
+    return InvoiceListPage(
+        items=[serialize_invoice_list_row(inv, paid_map.get(inv.id, 0.0)) for inv in invoices],
+        total=total,
+        page=page,
+        page_size=page_size,
+    )
 
 
 def invoice_out_by_client_request_id(db: Session, client_request_id: str) -> InvoiceOut | None:

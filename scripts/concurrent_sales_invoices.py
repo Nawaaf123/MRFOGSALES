@@ -40,8 +40,10 @@ def main() -> int:
         admin_token = r.json()["access_token"]
         admin_h = {"Authorization": f"Bearer {admin_token}"}
 
-        shops = client.get(f"{API}/shops", headers=admin_h).json()
-        products = client.get(f"{API}/products?active_only=true", headers=admin_h).json()
+        shops = client.get(f"{API}/shops?page=1&page_size=50", headers=admin_h).json()["items"]
+        products = client.get(
+            f"{API}/products?active_only=true&page=1&page_size=50", headers=admin_h
+        ).json()["items"]
         if not shops or not products:
             print("Need at least one shop and one active product", file=sys.stderr)
             return 1

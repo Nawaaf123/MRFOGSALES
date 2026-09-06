@@ -49,6 +49,13 @@ import {
 import { useAuth } from "@/lib/auth";
 import { api, ApiError } from "@/lib/api";
 import {
+  buildPageParams,
+  DEFAULT_PAGE_SIZE,
+  fetchAllPages,
+  type Paginated,
+} from "@/lib/pagination";
+import { ListPaginationBar } from "@/components/ui/ListPaginationBar";
+import {
   clearInvoiceCreateDraft,
   draftHasWork,
   isNetworkApiError,
@@ -224,11 +231,17 @@ const Invoices = () => {
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [shopFilter, setShopFilter] = useState("all");
+  const [page, setPage] = useState(1);
+  const pageSize = DEFAULT_PAGE_SIZE;
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedSearch(search.trim()), 300);
     return () => window.clearTimeout(timer);
   }, [search]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [debouncedSearch, statusFilter, shopFilter]);
 
   const [createOpen, setCreateOpen] = useState(false);
   const clientRequestIdRef = useRef(newClientRequestId());
@@ -268,26 +281,34 @@ const Invoices = () => {
     totalPending: number;
   } | null>(null);
 
-  const invoiceQueryParams = useMemo(() => {
-    const params = new URLSearchParams();
-    if (debouncedSearch) params.set("search", debouncedSearch);
-    if (statusFilter !== "all") params.set("payment_status", statusFilter);
-    if (shopFilter !== "all") params.set("shop_id", shopFilter);
-    const qs = params.toString();
-    return qs ? `?${qs}` : "";
-  }, [debouncedSearch, statusFilter, shopFilter]);
+  const invoiceQueryParams = useMemo(
+    () =>
+      buildPageParams({
+        search: debouncedSearch || undefined,
+        payment_status: statusFilter !== "all" ? statusFilter : undefined,
+        shop_id: shopFilter !== "all" ? shopFilter : undefined,
+        page,
+        page_size: pageSize,
+      }),
+    [debouncedSearch, statusFilter, shopFilter, page, pageSize]
+  );
 
-  const { data: invoices = [], isLoading } = useQuery({
+  const { data: invoicePage, isLoading } = useQuery({
     queryKey: ["invoices", invoiceQueryParams],
     queryFn: async () => {
       try {
-        return await api<Invoice[]>(`/invoices${invoiceQueryParams}`);
+        return await api<Paginated<Invoice>>(`/invoices${invoiceQueryParams}`);
       } catch (err) {
-        if (isNetworkApiError(err as ApiError)) return [] as Invoice[];
+        if (isNetworkApiError(err as ApiError)) {
+          return { items: [] as Invoice[], total: 0, page, page_size: pageSize };
+        }
         throw err;
       }
     },
   });
+
+  const invoices = invoicePage?.items ?? [];
+  const invoiceTotal = invoicePage?.total ?? 0;
 
   useInvoiceSyncQueue(user?.id);
   const { data: syncQueue = [] } = useQuery({
@@ -303,10 +324,10 @@ const Invoices = () => {
   );
 
   const { data: shops = [] } = useQuery({
-    queryKey: ["shops"],
+    queryKey: ["shops", "catalog"],
     queryFn: async () => {
       try {
-        const data = await api<Shop[]>("/shops");
+        const data = await fetchAllPages<Shop>("/shops");
         if (user?.id) saveOfflineShopsCache(user.id, data);
         return data;
       } catch (err) {
@@ -320,10 +341,12 @@ const Invoices = () => {
   });
 
   const { data: products = [], isLoading: productsLoading } = useQuery({
-    queryKey: ["products", "active", "brief"],
+    queryKey: ["products", "active", "brief", "catalog"],
     queryFn: async () => {
       try {
-        const data = await api<Product[]>("/products?active_only=true&brief=true");
+        const data = await fetchAllPages<Product>("/products", {
+          extraParams: { active_only: true, brief: true },
+        });
         if (user?.id) saveOfflineProductsCache(user.id, data);
         return data;
       } catch (err) {
@@ -1129,8 +1152,8 @@ const Invoices = () => {
           description="Create invoices, track balances, and record payments"
           stats={[
             {
-              label: "Listed",
-              value: isLoading ? "…" : invoices.length + localPendingInvoices.length,
+              label: "Total",
+              value: isLoading ? "…" : invoiceTotal + localPendingInvoices.length,
               accent: true,
             },
             {
@@ -1138,10 +1161,8 @@ const Invoices = () => {
               value: String(localPendingInvoices.length),
             },
             {
-              label: "Unpaid",
-              value: isLoading
-                ? "…"
-                : invoices.filter((i) => i.payment_status === "unpaid").length,
+              label: "On page",
+              value: isLoading ? "…" : invoices.length,
             },
             {
               label: "Open $",
@@ -1365,6 +1386,13 @@ const Invoices = () => {
               />
             ))
           )}
+          <ListPaginationBar
+            page={page}
+            pageSize={pageSize}
+            total={invoiceTotal}
+            onPageChange={setPage}
+            className="pt-2"
+          />
         </div>
       </div>
 

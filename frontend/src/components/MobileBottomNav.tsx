@@ -28,22 +28,23 @@ export function MobileBottomNav() {
       });
     } else if (kind === "shops") {
       void queryClient.prefetchQuery({
-        queryKey: ["shops", "include_frozen"],
-        queryFn: () => api("/shops?include_frozen=true"),
+        queryKey: ["shops", "include_frozen", "prefetch"],
+        queryFn: () =>
+          api("/shops?include_frozen=true&page=1&page_size=50"),
       });
     } else if (kind === "invoices") {
       void queryClient.prefetchQuery({
-        queryKey: ["invoices", ""],
-        queryFn: () => api("/invoices"),
+        queryKey: ["invoices", "?page=1&page_size=50"],
+        queryFn: () => api("/invoices?page=1&page_size=50"),
       });
       void queryClient.prefetchQuery({
-        queryKey: ["shops"],
-        queryFn: () => api("/shops"),
+        queryKey: ["shops", "catalog"],
+        queryFn: () => api("/shops?page=1&page_size=50"),
       });
     } else if (kind === "products") {
       void queryClient.prefetchQuery({
-        queryKey: ["products"],
-        queryFn: () => api("/products"),
+        queryKey: ["products", "prefetch"],
+        queryFn: () => api("/products?page=1&page_size=1"),
       });
     }
   };

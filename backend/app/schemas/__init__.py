@@ -272,6 +272,41 @@ class InvoiceListOut(ORMModel):
     amount_paid: float = 0
 
 
+class InvoiceListPage(BaseModel):
+    items: list[InvoiceListOut]
+    total: int
+    page: int
+    page_size: int
+
+
+class ProductListPage(BaseModel):
+    items: list[ProductOut]
+    total: int
+    page: int
+    page_size: int
+    categories: list[str] = []
+    subcategories: list[str] = []
+    catalog_total: int = 0
+    active_count: int = 0
+    low_stock_count: int = 0
+
+
+class ProductBriefListPage(BaseModel):
+    items: list[ProductBrief]
+    total: int
+    page: int
+    page_size: int
+
+
+class ShopListPage(BaseModel):
+    items: list[ShopOut]
+    total: int
+    page: int
+    page_size: int
+    active_count: int = 0
+    frozen_count: int = 0
+
+
 class PaymentCreate(BaseModel):
     invoice_id: UUID
     amount: float = Field(gt=0)
