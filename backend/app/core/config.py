@@ -18,6 +18,8 @@ class Settings(BaseSettings):
     resend_api_key: str = ""
     email_from: str = "Sales <sales@mrfogsales.com>"
     mapbox_access_token: str = ""
+    openai_api_key: str = ""
+    openai_model: str = "gpt-4o-mini"
 
     @property
     def cors_origin_list(self) -> list[str]:

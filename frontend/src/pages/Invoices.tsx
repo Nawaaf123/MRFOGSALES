@@ -52,6 +52,7 @@ import {
   clearInvoiceCreateDraft,
   draftHasWork,
   isNetworkApiError,
+  isValidUuid,
   loadInvoiceCreateDraft,
   newClientRequestId,
   saveInvoiceCreateDraft,
@@ -63,7 +64,7 @@ import { CreditDialog } from "@/components/invoices/CreditDialog";
 import { DistributePaymentDialog } from "@/components/invoices/DistributePaymentDialog";
 import { ShopInvoiceGroup } from "@/components/invoices/ShopInvoiceGroup";
 import { cn } from "@/lib/utils";
-import { Check, ChevronsUpDown, Plus, Trash2 } from "lucide-react";
+import { Check, ChevronsUpDown, Plus, Sparkles, Trash2 } from "lucide-react";
 
 type Shop = {
   id: string;
@@ -418,12 +419,18 @@ const Invoices = () => {
 
   const applyDraft = (draft: InvoiceCreateDraft) => {
     skipNextDraftPersistRef.current = true;
-    clientRequestIdRef.current = draft.client_request_id;
-    setShopId(draft.shop_id || "");
+    clientRequestIdRef.current = isValidUuid(draft.client_request_id)
+      ? draft.client_request_id
+      : newClientRequestId();
+    setShopId(isValidUuid(draft.shop_id) ? draft.shop_id : "");
     setNotes(draft.notes || "");
     setDiscountAmount(draft.discount_amount || "");
     setWarehouse(draft.warehouse === "B" ? "B" : "A");
-    setItems(Array.isArray(draft.items) ? draft.items : []);
+    setItems(
+      Array.isArray(draft.items)
+        ? draft.items.filter((item) => isValidUuid(item.product_id))
+        : []
+    );
     setProductSearch("");
     setCreateCategoryFilter("all");
     setCreateSubcategoryFilter("all");
@@ -531,10 +538,13 @@ const Invoices = () => {
 
   const createMutation = useMutation({
     mutationFn: async () => {
-      if (!shopId) throw { message: "Select a shop" } satisfies ApiError;
+      if (!isValidUuid(shopId)) throw { message: "Select a shop" } satisfies ApiError;
       if (items.length === 0) throw { message: "Add at least one product" } satisfies ApiError;
       if (createPaymentsTotal > totalAmount + 0.01) {
         throw { message: "Payments cannot exceed invoice total" } satisfies ApiError;
+      }
+      if (!isValidUuid(clientRequestIdRef.current)) {
+        clientRequestIdRef.current = newClientRequestId();
       }
 
       const payments: Array<{ amount: number; payment_method: PaymentMethod }> = [];
@@ -565,13 +575,15 @@ const Invoices = () => {
       const body = JSON.stringify({
         client_request_id: clientRequestIdRef.current,
         shop_id: shopId,
-        items: items.map((item) => ({
-          product_id: item.product_id,
-          product_name: item.product_name,
-          quantity: item.quantity,
-          unit_price: item.unit_price,
-          subtotal: item.subtotal,
-        })),
+        items: items
+          .filter((item) => isValidUuid(item.product_id))
+          .map((item) => ({
+            product_id: item.product_id,
+            product_name: item.product_name,
+            quantity: item.quantity,
+            unit_price: item.unit_price,
+            subtotal: item.subtotal,
+          })),
         discount_amount: discount,
         notes: notes.trim() || null,
         warehouse,
@@ -609,6 +621,72 @@ const Invoices = () => {
         return;
       }
       toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const suggestOrderMutation = useMutation({
+    mutationFn: () => {
+      if (!shopId) throw { message: "Select a shop first" } satisfies ApiError;
+      return api<{
+        items: Array<{
+          product_id: string;
+          product_name: string;
+          sku?: string | null;
+          quantity: number;
+          unit_price: number;
+          reason?: string | null;
+        }>;
+        note?: string | null;
+      }>("/ai/suggest-order", {
+        method: "POST",
+        body: JSON.stringify({ shop_id: shopId, limit: 10 }),
+      });
+    },
+    onSuccess: (data) => {
+      if (!data.items?.length) {
+        toast({
+          title: "No suggestion",
+          description: data.note || "No prior invoices for this shop.",
+        });
+        return;
+      }
+      setItems((prev) => {
+        const next = [...prev];
+        for (const sug of data.items) {
+          const idx = next.findIndex((i) => i.product_id === sug.product_id);
+          const qty = Math.max(1, Math.floor(Number(sug.quantity) || 1));
+          const price = Number(sug.unit_price) || 0;
+          if (idx >= 0) {
+            next[idx] = {
+              ...next[idx],
+              quantity: qty,
+              unit_price: price,
+              subtotal: qty * price,
+            };
+          } else {
+            next.push({
+              product_id: sug.product_id,
+              product_name: sug.product_name,
+              product_sku: sug.sku || null,
+              quantity: qty,
+              unit_price: price,
+              subtotal: qty * price,
+            });
+          }
+        }
+        return next;
+      });
+      toast({
+        title: "Suggested order added",
+        description: `${data.items.length} products from this shop’s history. Edit before creating.`,
+      });
+    },
+    onError: (error: ApiError) => {
+      toast({
+        title: error.status === 503 ? "AI not configured" : "Suggest failed",
+        description: error.message,
+        variant: "destructive",
+      });
     },
   });
 
@@ -924,6 +1002,22 @@ const Invoices = () => {
                   </SelectContent>
                 </Select>
               </div>
+            </div>
+
+            <div className="flex flex-col sm:flex-row sm:items-center gap-2">
+              <Button
+                type="button"
+                variant="secondary"
+                className="w-full sm:w-auto h-11"
+                disabled={!shopId || suggestOrderMutation.isPending}
+                onClick={() => suggestOrderMutation.mutate()}
+              >
+                <Sparkles className="h-4 w-4 mr-2" />
+                {suggestOrderMutation.isPending ? "Suggesting..." : "Suggest order"}
+              </Button>
+              <p className="text-xs text-muted-foreground">
+                Uses this shop’s recent invoices to prefill products (you can edit).
+              </p>
             </div>
 
             <div className="space-y-3 rounded-md border p-3 min-w-0">

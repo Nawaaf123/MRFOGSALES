@@ -210,7 +210,7 @@ def create_invoice(
     if not payload.items:
         raise HTTPException(status_code=400, detail="Invoice requires at least one item")
 
-    request_id = str(payload.client_request_id) if payload.client_request_id else None
+    request_id = (payload.client_request_id or "").strip() or None
     if request_id:
         replay = invoice_out_by_client_request_id(db, request_id)
         if replay is not None:

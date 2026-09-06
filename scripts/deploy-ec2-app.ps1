@@ -46,6 +46,8 @@ $SecretsFile = Join-Path $Infra "secrets.env"
 $ResendKey = if ($env:RESEND_API_KEY) { $env:RESEND_API_KEY } else { "" }
 $EmailFrom = if ($env:EMAIL_FROM) { $env:EMAIL_FROM } else { "Sales <onboarding@resend.dev>" }
 $MapboxToken = if ($env:VITE_MAPBOX_TOKEN) { $env:VITE_MAPBOX_TOKEN } else { "" }
+$OpenAiKey = if ($env:OPENAI_API_KEY) { $env:OPENAI_API_KEY } else { "" }
+$OpenAiModel = if ($env:OPENAI_MODEL) { $env:OPENAI_MODEL } else { "gpt-4o-mini" }
 if (Test-Path $SecretsFile) {
   Get-Content $SecretsFile | ForEach-Object {
     $line = $_.Trim()
@@ -56,11 +58,14 @@ if (Test-Path $SecretsFile) {
       "EMAIL_FROM" { if ($value.Trim()) { $EmailFrom = $value.Trim() } }
       "VITE_MAPBOX_TOKEN" { if ($value.Trim()) { $MapboxToken = $value.Trim() } }
       "MAPBOX_ACCESS_TOKEN" { if ($value.Trim()) { $MapboxToken = $value.Trim() } }
+      "OPENAI_API_KEY" { if ($value.Trim()) { $OpenAiKey = $value.Trim() } }
+      "OPENAI_MODEL" { if ($value.Trim()) { $OpenAiModel = $value.Trim() } }
     }
   }
 }
 Write-Host "Resend:  $(if ($ResendKey) { 'configured' } else { 'MISSING' })"
 Write-Host "Mapbox:  $(if ($MapboxToken) { 'configured' } else { 'MISSING' })"
+Write-Host "OpenAI:  $(if ($OpenAiKey) { 'configured' } else { 'MISSING' })"
 if (-not $ResendKey -or -not $MapboxToken) {
   Write-Host "Tip: copy infra/secrets.env.example to infra/secrets.env and fill keys, then re-run."
 }
@@ -160,6 +165,8 @@ RESEND_API_KEY=$ResendKey
 EMAIL_FROM=$EmailFrom
 VITE_MAPBOX_TOKEN=$MapboxToken
 MAPBOX_ACCESS_TOKEN=$MapboxToken
+OPENAI_API_KEY=$OpenAiKey
+OPENAI_MODEL=$OpenAiModel
 EOF
 chown ec2-user:ec2-user /opt/mrfogsales/.env
 "@
@@ -175,6 +182,7 @@ docker compose -f docker-compose.yml --env-file .env up -d --build
 docker compose -f docker-compose.yml ps
 # Confirm Mapbox token made it into the frontend image env at build time
 grep -E '^VITE_MAPBOX_TOKEN=' .env | sed 's/=.*/=***configured***/'
+grep -E '^OPENAI_API_KEY=' .env | sed 's/=.*/=***/'
 '@
 Invoke-RemoteBash $up
 
