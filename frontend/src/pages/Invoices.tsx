@@ -74,9 +74,7 @@ import {
 } from "@/lib/invoiceSyncQueue";
 import {
   loadOfflineProductsCache,
-  loadOfflineShopsCache,
   saveOfflineProductsCache,
-  saveOfflineShopsCache,
 } from "@/lib/offlineCatalogCache";
 import {
   queueItemAsLocalInvoice,
@@ -88,16 +86,11 @@ import { generateInvoicePDF, saveInvoicePDF } from "@/lib/pdfGenerator";
 import { CreditDialog } from "@/components/invoices/CreditDialog";
 import { DistributePaymentDialog } from "@/components/invoices/DistributePaymentDialog";
 import { ShopInvoiceGroup } from "@/components/invoices/ShopInvoiceGroup";
+import { ShopSearchSelect } from "@/components/shops/ShopSearchSelect";
 import { PageHero } from "@/components/ui/PageHero";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { cn } from "@/lib/utils";
 import { Check, ChevronsUpDown, CloudOff, FileText, Plus, RefreshCw, ScanLine, Sparkles, Trash2 } from "lucide-react";
-
-type Shop = {
-  id: string;
-  name: string;
-  is_frozen?: boolean;
-};
 
 type Product = {
   id: string;
@@ -244,6 +237,7 @@ const Invoices = () => {
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [shopFilter, setShopFilter] = useState("all");
+  const [shopFilterLabel, setShopFilterLabel] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const pageSize = DEFAULT_PAGE_SIZE;
 
@@ -262,6 +256,7 @@ const Invoices = () => {
   const clientRequestIdRef = useRef(newClientRequestId());
   const skipNextDraftPersistRef = useRef(false);
   const [shopId, setShopId] = useState("");
+  const [selectedShopName, setSelectedShopName] = useState("");
   const [notes, setNotes] = useState("");
   const [discountAmount, setDiscountAmount] = useState("");
   const [warehouse, setWarehouse] = useState<"A" | "B">(user?.assigned_warehouse || "A");
@@ -308,11 +303,20 @@ const Invoices = () => {
     [debouncedSearch, statusFilter, shopFilter, page, pageSize]
   );
 
-  const { data: invoicePage, isLoading } = useQuery({
+  const {
+    data: invoicePage,
+    isLoading,
+    isError: invoicesError,
+    error: invoicesErrorObj,
+    refetch: refetchInvoicePage,
+    isFetching: invoicesFetching,
+  } = useQuery({
     queryKey: ["invoices", invoiceQueryParams],
     queryFn: async () => {
       try {
-        return await api<Paginated<Invoice>>(`/invoices${invoiceQueryParams}`);
+        return await api<Paginated<Invoice>>(`/invoices${invoiceQueryParams}`, {
+          timeoutMs: 20_000,
+        });
       } catch (err) {
         if (isNetworkApiError(err as ApiError)) {
           return { items: [] as Invoice[], total: 0, page, page_size: pageSize };
@@ -338,29 +342,13 @@ const Invoices = () => {
     [syncQueue]
   );
 
-  const { data: shops = [] } = useQuery({
-    queryKey: ["shops", "catalog"],
-    queryFn: async () => {
-      try {
-        const data = await fetchAllPages<Shop>("/shops");
-        if (user?.id) saveOfflineShopsCache(user.id, data);
-        return data;
-      } catch (err) {
-        if (user?.id && isNetworkApiError(err as ApiError)) {
-          const cached = loadOfflineShopsCache<Shop>(user.id);
-          if (cached?.length) return cached;
-        }
-        throw err;
-      }
-    },
-  });
-
   const { data: products = [], isLoading: productsLoading } = useQuery({
     queryKey: ["products", "active", "brief", "catalog"],
     queryFn: async () => {
       try {
         const data = await fetchAllPages<Product>("/products", {
           extraParams: { active_only: true, brief: true },
+          timeoutMs: 20_000,
         });
         if (user?.id) saveOfflineProductsCache(user.id, data);
         return data;
@@ -530,6 +518,7 @@ const Invoices = () => {
     setEditingInvoiceId(null);
     setEditingInvoiceNumber(null);
     setShopId("");
+    setSelectedShopName("");
     setNotes("");
     setDiscountAmount("");
     setWarehouse(user?.assigned_warehouse || "A");
@@ -551,6 +540,7 @@ const Invoices = () => {
       ? draft.client_request_id
       : newClientRequestId();
     setShopId(isValidUuid(draft.shop_id) ? draft.shop_id : "");
+    setSelectedShopName("");
     setNotes(draft.notes || "");
     setDiscountAmount(draft.discount_amount || "");
     setWarehouse(draft.warehouse === "B" ? "B" : "A");
@@ -620,6 +610,7 @@ const Invoices = () => {
       setEditingInvoiceId(full.id);
       setEditingInvoiceNumber(full.invoice_number);
       setShopId(full.shop_id);
+      setSelectedShopName(full.shop?.name || "");
       setNotes(full.notes || "");
       setDiscountAmount(full.discount_amount ? String(full.discount_amount) : "");
       setWarehouse((full.warehouse as "A" | "B") || user?.assigned_warehouse || "A");
@@ -840,7 +831,7 @@ const Invoices = () => {
     if (check > 0) payments.push({ amount: check, payment_method: "check" });
     if (credit > 0) payments.push({ amount: credit, payment_method: "credit" });
 
-    const shopName = shops.find((s) => s.id === shopId)?.name || "Unknown shop";
+    const shopName = selectedShopName.trim() || "Unknown shop";
     const queueItem = buildSyncQueueItem({
       userId: user.id,
       clientRequestId: clientRequestIdRef.current,
@@ -1362,19 +1353,16 @@ const Invoices = () => {
             </div>
             <div className="space-y-2">
               <Label>Shop</Label>
-              <Select value={shopFilter} onValueChange={setShopFilter}>
-                <SelectTrigger className="h-11">
-                  <SelectValue />
-                </SelectTrigger>
-                <SelectContent>
-                  <SelectItem value="all">All shops</SelectItem>
-                  {shops.map((shop) => (
-                    <SelectItem key={shop.id} value={shop.id}>
-                      {shop.name}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
+              <ShopSearchSelect
+                value={shopFilter}
+                allowAll
+                allLabel="All shops"
+                selectedLabel={shopFilter === "all" ? null : shopFilterLabel}
+                onChange={(next, shop) => {
+                  setShopFilter(next);
+                  setShopFilterLabel(shop?.name ?? null);
+                }}
+              />
             </div>
           </div>
         </Card>
@@ -1386,6 +1374,25 @@ const Invoices = () => {
                 <div key={i} className="h-24 animate-pulse rounded-xl border border-border bg-muted/60" />
               ))}
             </div>
+          ) : invoicesError ? (
+            <EmptyState
+              icon={FileText}
+              title="Couldn’t load invoices"
+              description={
+                (invoicesErrorObj as ApiError)?.message ||
+                "Check your connection and try again."
+              }
+              action={
+                <Button
+                  className="h-11"
+                  disabled={invoicesFetching}
+                  onClick={() => void refetchInvoicePage()}
+                >
+                  <RefreshCw className="mr-2 h-4 w-4" />
+                  {invoicesFetching ? "Retrying…" : "Retry"}
+                </Button>
+              }
+            />
           ) : shopGroups.length === 0 ? (
             <EmptyState
               icon={FileText}
@@ -1544,18 +1551,16 @@ const Invoices = () => {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-2 min-w-0">
                 <Label>Shop *</Label>
-                <Select value={shopId} onValueChange={setShopId} disabled={Boolean(editingInvoiceId)}>
-                  <SelectTrigger className="w-full">
-                    <SelectValue placeholder="Select shop" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {shops.map((shop) => (
-                      <SelectItem key={shop.id} value={shop.id}>
-                        {shop.name}
-                      </SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
+                <ShopSearchSelect
+                  value={shopId}
+                  placeholder="Select shop"
+                  disabled={Boolean(editingInvoiceId)}
+                  selectedLabel={selectedShopName || null}
+                  onChange={(next, shop) => {
+                    setShopId(next);
+                    setSelectedShopName(shop?.name || "");
+                  }}
+                />
               </div>
               <div className="space-y-2 min-w-0">
                 <Label>Warehouse</Label>
