@@ -15,6 +15,12 @@ try {
   $AdminPass = terraform output -raw seed_admin_password
   $DbPass = terraform output -raw db_password
   $AppSecret = terraform output -raw app_secret
+  $DomainName = ""
+  $prevOut = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  $DomainName = (terraform output -raw domain_name 2>$null)
+  if ($LASTEXITCODE -ne 0) { $DomainName = "" }
+  $ErrorActionPreference = $prevOut
   $BackupBucket = ""
   $prevOut = $ErrorActionPreference
   $ErrorActionPreference = "Continue"
@@ -125,6 +131,7 @@ try {
     --exclude=backend/.venv `
     --exclude=backend/__pycache__ `
     docker-compose.prod.yml `
+    Caddyfile `
     backend/Dockerfile `
     backend/requirements.txt `
     backend/app `
@@ -153,12 +160,43 @@ chown -R ec2-user:ec2-user /opt/mrfogsales
 '@
 Invoke-RemoteBash $extract
 
+# Keep Caddyfile IP in sync with current Elastic IP
+$caddyWrite = @"
+set -e
+cat > /opt/mrfogsales/Caddyfile <<'EOF'
+mrfogorder.com, www.mrfogorder.com {
+	encode gzip
+	reverse_proxy web:80
+}
+
+http://$HostIp {
+	encode gzip
+	reverse_proxy web:80
+}
+EOF
+chown ec2-user:ec2-user /opt/mrfogsales/Caddyfile
+"@
+Invoke-RemoteBash $caddyWrite
+
+$CorsOrigins = @(
+  $AppUrl
+  "http://${HostIp}"
+  "https://${HostIp}"
+)
+if ($DomainName) {
+  $CorsOrigins += "https://${DomainName}"
+  $CorsOrigins += "https://www.${DomainName}"
+  $CorsOrigins += "http://${DomainName}"
+  $CorsOrigins += "http://www.${DomainName}"
+}
+$CorsOriginsCsv = ($CorsOrigins | Select-Object -Unique) -join ","
+
 $envScript = @"
 set -e
 cat > /opt/mrfogsales/.env <<'EOF'
 DB_PASSWORD=$DbPass
 SECRET_KEY=$AppSecret
-CORS_ORIGINS=$AppUrl
+CORS_ORIGINS=$CorsOriginsCsv
 SEED_ADMIN_EMAIL=$AdminEmail
 SEED_ADMIN_PASSWORD=$AdminPass
 RESEND_API_KEY=$ResendKey
@@ -214,6 +252,10 @@ echo "Backup cron installed. Bucket=$BackupBucket"
 
 Write-Host ""
 Write-Host "App URL:  $AppUrl"
+if ($DomainName) {
+  Write-Host "WWW URL:  https://www.$DomainName"
+  Write-Host "IP URL:   http://$HostIp"
+}
 Write-Host "Health:   $AppUrl/health"
 Write-Host "Admin:    $AdminEmail"
 Write-Host "Password: $AdminPass"

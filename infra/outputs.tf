@@ -3,7 +3,16 @@ output "app_public_ip" {
 }
 
 output "app_url" {
-  value = "http://${aws_eip.app.public_ip}"
+  value = trimspace(var.domain_name) != "" ? "https://${trimspace(var.domain_name)}" : "http://${aws_eip.app.public_ip}"
+}
+
+output "app_url_ip" {
+  value       = "http://${aws_eip.app.public_ip}"
+  description = "Direct Elastic IP URL (HTTP)."
+}
+
+output "domain_name" {
+  value = trimspace(var.domain_name)
 }
 
 output "ssh_command" {

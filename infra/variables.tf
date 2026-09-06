@@ -23,3 +23,9 @@ variable "allowed_ssh_cidr" {
   default     = "0.0.0.0/0"
   description = "Restrict SSH (e.g. your.home.ip/32). Default open — tighten after first deploy."
 }
+
+variable "domain_name" {
+  type        = string
+  default     = "mrfogorder.com"
+  description = "Public domain for HTTPS (Caddy / Let's Encrypt). Leave empty to use Elastic IP HTTP only."
+}

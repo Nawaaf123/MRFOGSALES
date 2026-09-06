@@ -68,8 +68,16 @@ terraform destroy -auto-approve
 
 Mapbox is baked into the frontend image at build time; Resend is read by the API from `.env`.
 
+## Domain + HTTPS
+
+Production domain: **mrfogorder.com** (Caddy + Let’s Encrypt on EC2).
+
+1. DNS A for `@` → Elastic IP; `www` CNAME → apex (TTL 300 while switching).
+2. Terraform opens port **443**; `.\scripts\deploy-ec2-app.ps1` runs Caddy in front of nginx.
+3. App URL: `https://mrfogorder.com` (IP HTTP still works for emergencies).
+
 ## Hardening later
 
 - Set `allowed_ssh_cidr = "YOUR.IP/32"` in `infra/terraform.tfvars`
-- Add a domain + HTTPS (Caddy/Let’s Encrypt or ACM + ALB)
-- Back up the Postgres Docker volume
+- Verify Resend sending domain for production email From addresses
+- Back up the Postgres Docker volume (nightly S3 dump is installed by deploy when the backup bucket exists)
