@@ -357,7 +357,7 @@ const Invoices = () => {
         throw err;
       }
     },
-    enabled: createOpen || canCreate,
+    enabled: createOpen,
   });
 
   const createCategories = useMemo(() => {

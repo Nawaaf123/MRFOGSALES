@@ -29,33 +29,30 @@ def seed_admin(db: Session) -> None:
     db.commit()
 
 
-def ensure_schema() -> None:
-    """Add columns that create_all will not alter on existing databases."""
-    statements = [
-        "ALTER TABLE shops ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION",
-        "ALTER TABLE shops ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION",
-        "ALTER TABLE products ADD COLUMN IF NOT EXISTS sku VARCHAR(64)",
-        "CREATE UNIQUE INDEX IF NOT EXISTS ix_products_sku_unique ON products (sku) WHERE sku IS NOT NULL",
-        "ALTER TABLE products ADD COLUMN IF NOT EXISTS barcode VARCHAR(64)",
-        "CREATE UNIQUE INDEX IF NOT EXISTS ix_products_barcode_unique ON products (barcode) WHERE barcode IS NOT NULL",
-        "CREATE INDEX IF NOT EXISTS ix_products_barcode ON products (barcode)",
-        "CREATE INDEX IF NOT EXISTS ix_invoices_payment_status ON invoices (payment_status)",
-        "CREATE INDEX IF NOT EXISTS ix_invoices_created_at ON invoices (created_at DESC)",
-        "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS client_request_id VARCHAR(64)",
-        "CREATE UNIQUE INDEX IF NOT EXISTS ix_invoices_client_request_id "
-        "ON invoices (client_request_id) WHERE client_request_id IS NOT NULL",
-        "CREATE INDEX IF NOT EXISTS ix_products_is_active ON products (is_active)",
-        "CREATE INDEX IF NOT EXISTS ix_shops_is_frozen ON shops (is_frozen)",
-    ]
-    with engine.begin() as conn:
-        for statement in statements:
-            conn.execute(text(statement))
-
-
 @asynccontextmanager
 async def lifespan(_: FastAPI):
-    Base.metadata.create_all(bind=engine)
-    ensure_schema()
+    # Serialize schema/seed across gunicorn workers so startups don't race.
+    with engine.begin() as conn:
+        conn.execute(text("SELECT pg_advisory_xact_lock(872_364_199)"))
+        Base.metadata.create_all(bind=conn)
+        for statement in [
+            "ALTER TABLE shops ADD COLUMN IF NOT EXISTS latitude DOUBLE PRECISION",
+            "ALTER TABLE shops ADD COLUMN IF NOT EXISTS longitude DOUBLE PRECISION",
+            "ALTER TABLE products ADD COLUMN IF NOT EXISTS sku VARCHAR(64)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_products_sku_unique ON products (sku) WHERE sku IS NOT NULL",
+            "ALTER TABLE products ADD COLUMN IF NOT EXISTS barcode VARCHAR(64)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_products_barcode_unique ON products (barcode) WHERE barcode IS NOT NULL",
+            "CREATE INDEX IF NOT EXISTS ix_products_barcode ON products (barcode)",
+            "CREATE INDEX IF NOT EXISTS ix_invoices_payment_status ON invoices (payment_status)",
+            "CREATE INDEX IF NOT EXISTS ix_invoices_created_at ON invoices (created_at DESC)",
+            "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS client_request_id VARCHAR(64)",
+            "CREATE UNIQUE INDEX IF NOT EXISTS ix_invoices_client_request_id "
+            "ON invoices (client_request_id) WHERE client_request_id IS NOT NULL",
+            "CREATE INDEX IF NOT EXISTS ix_products_is_active ON products (is_active)",
+            "CREATE INDEX IF NOT EXISTS ix_shops_is_frozen ON shops (is_frozen)",
+        ]:
+            conn.execute(text(statement))
+
     db = SessionLocal()
     try:
         seed_admin(db)

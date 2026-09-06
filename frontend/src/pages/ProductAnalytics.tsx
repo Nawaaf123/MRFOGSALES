@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { lazy, Suspense, useMemo, useState } from "react";
 import { useQuery } from "@tanstack/react-query";
 import {
   startOfMonth,
@@ -6,19 +6,6 @@ import {
   subDays,
   format,
 } from "date-fns";
-import {
-  Bar,
-  BarChart,
-  CartesianGrid,
-  ComposedChart,
-  Legend,
-  Line,
-  ResponsiveContainer,
-  Tooltip,
-  XAxis,
-  YAxis,
-} from "recharts";
-import * as XLSX from "xlsx";
 import { StatsCard } from "@/components/dashboard/StatsCard";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
@@ -45,6 +32,8 @@ import {
   ShoppingBag,
   TrendingDown,
 } from "lucide-react";
+
+const ProductAnalyticsCharts = lazy(() => import("./ProductAnalyticsCharts"));
 
 type DatePreset = "7d" | "30d" | "90d" | "month" | "year";
 
@@ -230,7 +219,8 @@ const ProductAnalytics = () => {
   const partialPct = ((moneyMix?.partial_outstanding ?? 0) / moneyTotal) * 100;
   const unpaidPct = ((moneyMix?.unpaid_amount ?? 0) / moneyTotal) * 100;
 
-  const exportExcel = () => {
+  const exportExcel = async () => {
+    const XLSX = await import("xlsx");
     const wb = XLSX.utils.book_new();
     const summary = [
       { Metric: "Period Start", Value: format(from, "yyyy-MM-dd") },
@@ -419,43 +409,24 @@ const ProductAnalytics = () => {
         />
       </div>
 
-      <Card className="border-primary/10">
-        <CardHeader>
-          <CardTitle className="text-base">Daily revenue &amp; collections</CardTitle>
-        </CardHeader>
-        <CardContent className="h-[320px]">
-          {dailyLoading ? (
-            <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-              Loading…
-            </div>
-          ) : dailyChart.length === 0 ? (
-            <EmptyState
-              icon={BarChart3}
-              title="No activity in this period"
-              description="Try a wider date range"
-            />
-          ) : (
-            <ResponsiveContainer width="100%" height="100%">
-              <ComposedChart data={dailyChart}>
-                <CartesianGrid strokeDasharray="3 3" vertical={false} />
-                <XAxis dataKey="label" tick={{ fontSize: 11 }} />
-                <YAxis tick={{ fontSize: 11 }} />
-                <Tooltip />
-                <Legend />
-                <Bar dataKey="revenue" name="Revenue" fill="#D95D4E" radius={[4, 4, 0, 0]} />
-                <Line
-                  type="monotone"
-                  dataKey="collected"
-                  name="Collected"
-                  stroke="#1F2937"
-                  strokeWidth={2}
-                  dot={false}
-                />
-              </ComposedChart>
-            </ResponsiveContainer>
-          )}
-        </CardContent>
-      </Card>
+      <Suspense
+        fallback={
+          <Card className="border-primary/10">
+            <CardContent className="flex h-[320px] items-center justify-center text-sm text-muted-foreground">
+              Loading charts…
+            </CardContent>
+          </Card>
+        }
+      >
+        <div className="space-y-4">
+          <ProductAnalyticsCharts
+            dailyChart={dailyChart}
+            dailyLoading={dailyLoading}
+            categoryChart={categoryChart}
+            catLoading={catLoading}
+          />
+        </div>
+      </Suspense>
 
       <Card className="overflow-hidden border-primary/10">
         <CardHeader className="border-b border-primary/10 bg-gradient-to-r from-primary/[0.07] to-transparent pb-3">
@@ -503,36 +474,6 @@ const ProductAnalytics = () => {
       </Card>
 
       <div className="grid gap-4 lg:grid-cols-2">
-        <Card className="border-primary/10">
-          <CardHeader>
-            <CardTitle className="text-base">Revenue by category</CardTitle>
-          </CardHeader>
-          <CardContent className="h-[300px]">
-            {catLoading ? (
-              <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
-                Loading…
-              </div>
-            ) : categoryChart.length === 0 ? (
-              <p className="text-sm text-muted-foreground">No category sales</p>
-            ) : (
-              <ResponsiveContainer width="100%" height="100%">
-                <BarChart data={categoryChart} layout="vertical" margin={{ left: 8, right: 12 }}>
-                  <CartesianGrid strokeDasharray="3 3" horizontal={false} />
-                  <XAxis type="number" tick={{ fontSize: 11 }} />
-                  <YAxis type="category" dataKey="name" width={100} tick={{ fontSize: 11 }} />
-                  <Tooltip
-                    formatter={(value: number, _n, item) => [
-                      `$${Number(value).toFixed(2)}`,
-                      (item?.payload as { fullName?: string })?.fullName || "Revenue",
-                    ]}
-                  />
-                  <Bar dataKey="revenue" fill="#D95D4E" radius={[0, 4, 4, 0]} />
-                </BarChart>
-              </ResponsiveContainer>
-            )}
-          </CardContent>
-        </Card>
-
         <Card className="overflow-hidden border-primary/10">
           <CardHeader className="border-b border-primary/10 bg-gradient-to-r from-primary/[0.05] to-transparent">
             <CardTitle className="flex items-center gap-2 text-base">

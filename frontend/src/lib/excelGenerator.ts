@@ -1,7 +1,7 @@
-import * as XLSX from 'xlsx';
 import { supabase } from '@/integrations/supabase/client';
 
 export const exportInvoicesToExcel = async () => {
+  const XLSX = await import('xlsx');
   try {
     // Fetch all invoices with related data
     const { data: invoices, error: invoicesError } = await supabase
