@@ -83,9 +83,8 @@ import { DistributePaymentDialog } from "@/components/invoices/DistributePayment
 import { ShopInvoiceGroup } from "@/components/invoices/ShopInvoiceGroup";
 import { PageHero } from "@/components/ui/PageHero";
 import { EmptyState } from "@/components/ui/EmptyState";
-import { BarcodeScanDialog } from "@/components/products/BarcodeScanDialog";
 import { cn } from "@/lib/utils";
-import { Check, ChevronsUpDown, CloudOff, FileText, Plus, RefreshCw, ScanBarcode, Sparkles, Trash2 } from "lucide-react";
+import { Check, ChevronsUpDown, CloudOff, FileText, Plus, RefreshCw, ScanLine, Sparkles, Trash2 } from "lucide-react";
 
 type Shop = {
   id: string;
@@ -244,7 +243,9 @@ const Invoices = () => {
   const [createSubcategoryFilter, setCreateSubcategoryFilter] = useState("all");
   const [createCategoryOpen, setCreateCategoryOpen] = useState(false);
   const [createSubcategoryOpen, setCreateSubcategoryOpen] = useState(false);
-  const [barcodeScanOpen, setBarcodeScanOpen] = useState(false);
+  const [gunScannerOn, setGunScannerOn] = useState(false);
+  const gunScanBufferRef = useRef("");
+  const gunScanLastKeyAtRef = useRef(0);
   const [cashAmount, setCashAmount] = useState("");
   const [checkAmount, setCheckAmount] = useState("");
   const [creditAmount, setCreditAmount] = useState("");
@@ -633,6 +634,76 @@ const Invoices = () => {
     addProductQuick(product);
     setProductSearch("");
     toast({ title: "Added", description: product.name });
+  };
+
+  const applyScannedCodeRef = useRef(applyScannedCode);
+  applyScannedCodeRef.current = applyScannedCode;
+
+  // Bluetooth gun scanner mode: capture keystrokes page-wide (works while scrolling).
+  useEffect(() => {
+    if (!createOpen) {
+      setGunScannerOn(false);
+      gunScanBufferRef.current = "";
+    }
+  }, [createOpen]);
+
+  useEffect(() => {
+    if (!createOpen || !gunScannerOn) return;
+
+    const isTypingField = (target: EventTarget | null) => {
+      if (!(target instanceof HTMLElement)) return false;
+      const tag = target.tagName;
+      if (tag === "TEXTAREA" || tag === "SELECT") return true;
+      if (target.isContentEditable) return true;
+      if (tag === "INPUT") {
+        const type = ((target as HTMLInputElement).type || "text").toLowerCase();
+        return !["button", "checkbox", "radio", "submit", "reset", "file", "hidden"].includes(type);
+      }
+      return false;
+    };
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      // Let normal typing in notes / amounts / search work; gun works everywhere else (incl. scroll).
+      if (isTypingField(e.target)) return;
+
+      const now = Date.now();
+      // Scanners burst keys quickly; slow gaps start a new code.
+      if (now - gunScanLastKeyAtRef.current > 80) {
+        gunScanBufferRef.current = "";
+      }
+      gunScanLastKeyAtRef.current = now;
+
+      if (e.key === "Enter") {
+        e.preventDefault();
+        e.stopPropagation();
+        const code = gunScanBufferRef.current.trim();
+        gunScanBufferRef.current = "";
+        if (code) applyScannedCodeRef.current(code);
+        return;
+      }
+
+      if (e.key.length === 1) {
+        e.preventDefault();
+        e.stopPropagation();
+        gunScanBufferRef.current += e.key;
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [createOpen, gunScannerOn]);
+
+  const toggleGunScanner = () => {
+    setGunScannerOn((on) => {
+      const next = !on;
+      if (next) {
+        gunScanBufferRef.current = "";
+        const active = document.activeElement;
+        if (active instanceof HTMLElement) active.blur();
+      }
+      return next;
+    });
   };
 
   const updateLine = (index: number, field: "quantity" | "unit_price", value: number) => {
@@ -1367,20 +1438,41 @@ const Invoices = () => {
             <div className="space-y-3 rounded-md border p-3 min-w-0">
               <div className="flex flex-col gap-0.5">
                 <Label className="text-base">Products</Label>
-                <span className="text-xs text-muted-foreground">Tap a product to add · change qty below</span>
+                <span className="text-xs text-muted-foreground">
+                  Tap a product to add · change qty below
+                </span>
               </div>
+
+              {gunScannerOn && (
+                <div className="flex items-center justify-between gap-3 rounded-lg border border-primary/25 bg-primary/10 px-3 py-2.5">
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-primary">Scanner on</p>
+                    <p className="text-xs text-muted-foreground">
+                      Scan anytime — scroll is OK. Soft keyboard stays closed.
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-10 shrink-0"
+                    onClick={toggleGunScanner}
+                  >
+                    Stop
+                  </Button>
+                </div>
+              )}
 
               <div className="grid grid-cols-1 gap-2 min-w-0">
                 <div className="flex gap-2 min-w-0">
                   <Input
-                    placeholder="Search SKU, barcode, or flavor… (scanner OK)"
+                    placeholder="Search SKU, barcode, or flavor…"
                     value={productSearch}
                     onChange={(e) => setProductSearch(e.target.value)}
                     onKeyDown={(e) => {
                       if (e.key !== "Enter") return;
                       const code = productSearch.trim();
                       if (!code) return;
-                      // External Bluetooth scanners type the code then Enter
+                      // Fallback when gun mode is off: scanner typed into this box
                       if (findProductByCode(code)) {
                         e.preventDefault();
                         applyScannedCode(code);
@@ -1390,15 +1482,23 @@ const Invoices = () => {
                   />
                   <Button
                     type="button"
-                    variant="outline"
-                    className="h-11 shrink-0 border-primary/30 px-3"
-                    title="Scan with camera"
+                    variant={gunScannerOn ? "default" : "outline"}
+                    className={cn(
+                      "h-11 shrink-0 px-3",
+                      !gunScannerOn && "border-primary/30"
+                    )}
+                    title={gunScannerOn ? "Stop Bluetooth scanner mode" : "Bluetooth scanner mode"}
                     disabled={productsLoading || products.length === 0}
-                    onClick={() => setBarcodeScanOpen(true)}
+                    onClick={toggleGunScanner}
                   >
-                    <ScanBarcode className="h-5 w-5" />
+                    <ScanLine className="h-5 w-5" />
                   </Button>
                 </div>
+                {!gunScannerOn && (
+                  <p className="text-xs text-muted-foreground">
+                    External gun: tap the scan button (no soft keyboard). Scroll while scanning is OK.
+                  </p>
+                )}
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 min-w-0">
                 <Popover open={createCategoryOpen} onOpenChange={setCreateCategoryOpen}>
@@ -1783,12 +1883,6 @@ const Invoices = () => {
           </div>
         </DialogContent>
       </Dialog>
-
-      <BarcodeScanDialog
-        open={barcodeScanOpen}
-        onOpenChange={setBarcodeScanOpen}
-        onScan={applyScannedCode}
-      />
 
       <Dialog open={!!paymentInvoice} onOpenChange={(open) => !open && setPaymentInvoice(null)}>
         <DialogContent className="max-w-md overflow-hidden p-0">
