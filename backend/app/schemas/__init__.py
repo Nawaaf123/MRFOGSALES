@@ -207,7 +207,8 @@ class InvoiceCreate(BaseModel):
     warehouse: WarehouseCode | None = WarehouseCode.A
     payments: list[PaymentIn] = []
     # Same id on retry/double-submit returns the original invoice (no duplicate).
-    client_request_id: UUID | None = None
+    # Stored as string; accept any non-empty client token up to 64 chars (not only UUID).
+    client_request_id: str | None = Field(default=None, max_length=64)
 
 
 class InvoiceItemOut(ORMModel):
@@ -463,3 +464,36 @@ class LocationOut(ORMModel):
     updated_at: datetime
     full_name: str | None = None
     email: str | None = None
+
+
+class SuggestOrderRequest(BaseModel):
+    shop_id: UUID
+    limit: int = Field(default=10, ge=1, le=30)
+
+
+class SuggestOrderItem(BaseModel):
+    product_id: UUID
+    product_name: str
+    sku: str | None = None
+    quantity: int
+    unit_price: float
+    reason: str | None = None
+
+
+class SuggestOrderResponse(BaseModel):
+    items: list[SuggestOrderItem]
+    shop_id: UUID
+    note: str | None = None
+
+
+class AiChatMessage(BaseModel):
+    role: str
+    content: str
+
+
+class AiChatRequest(BaseModel):
+    messages: list[AiChatMessage] = Field(default_factory=list, max_length=20)
+
+
+class AiChatResponse(BaseModel):
+    reply: str

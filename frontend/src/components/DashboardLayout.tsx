@@ -8,6 +8,7 @@ import { cn } from "@/lib/utils";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { MobileBottomNav } from "@/components/MobileBottomNav";
 import { LocationTracker } from "@/components/location/LocationTracker";
+import { AiChatDrawer } from "@/components/ai/AiChatDrawer";
 
 export const DashboardLayout = ({ children }: { children?: React.ReactNode }) => {
   const { signOut, user } = useAuth();
@@ -129,6 +130,7 @@ export const DashboardLayout = ({ children }: { children?: React.ReactNode }) =>
         {children ?? <Outlet />}
       </main>
       <MobileBottomNav />
+      <AiChatDrawer />
     </div>
   );
 };
