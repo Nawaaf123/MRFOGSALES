@@ -29,6 +29,7 @@ def list_products(
                 id=p.id,
                 name=p.name,
                 sku=p.sku,
+                barcode=p.barcode,
                 category=p.category,
                 subcategory=p.subcategory,
                 price=float(p.price or 0),

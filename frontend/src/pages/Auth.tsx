@@ -6,8 +6,9 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Textarea } from "@/components/ui/textarea";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
 import { useToast } from "@/hooks/use-toast";
+import { cn } from "@/lib/utils";
+import mrFogLogo from "@/assets/mr-fog-logo.jpg";
 
 type AuthMode = "login" | "signup" | "retailer";
 
@@ -110,22 +111,65 @@ const Auth = () => {
   };
 
   const title =
-    mode === "login" ? "Sign In" : mode === "signup" ? "Sign Up" : "Retailer Signup";
+    mode === "login" ? "Sign in" : mode === "signup" ? "Create account" : "Retailer access";
   const description =
     mode === "login"
-      ? "Welcome back to MR FOG® Sales Manager"
+      ? "Welcome back to MR FOG Sales Manager"
       : mode === "signup"
-        ? "Create your MR FOG® account"
-        : "Request access as a retailer. An admin must approve your request.";
+        ? "Set up your team account"
+        : "Request retailer access — an admin must approve it";
+
+  const modes: { id: AuthMode; label: string }[] = [
+    { id: "login", label: "Sign in" },
+    { id: "signup", label: "Sign up" },
+    { id: "retailer", label: "Retailer" },
+  ];
 
   return (
-    <div className="flex min-h-screen items-center justify-center bg-gradient-to-br from-primary/5 via-background to-accent/5 p-4">
-      <Card className="w-full max-w-md">
-        <CardHeader className="text-center">
-          <CardTitle className="text-2xl">{title}</CardTitle>
-          <CardDescription>{description}</CardDescription>
-        </CardHeader>
-        <CardContent>
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-white p-4">
+      <div
+        aria-hidden
+        className="pointer-events-none absolute inset-0 bg-gradient-to-br from-primary/[0.14] via-white to-primary/[0.05]"
+      />
+      <div
+        aria-hidden
+        className="pointer-events-none absolute -left-24 top-10 h-72 w-72 rounded-full bg-primary/20 blur-3xl"
+      />
+      <div
+        aria-hidden
+        className="pointer-events-none absolute -right-16 bottom-0 h-64 w-64 rounded-full bg-primary/10 blur-3xl"
+      />
+
+      <div className="relative w-full max-w-md overflow-hidden rounded-2xl border border-primary/15 bg-white/90 shadow-lg shadow-primary/10 backdrop-blur-sm">
+        <div className="border-b border-primary/10 bg-gradient-to-r from-primary/15 to-transparent px-6 py-6 text-center">
+          <img
+            src={mrFogLogo}
+            alt="MR FOG"
+            className="mx-auto mb-3 h-12 object-contain"
+          />
+          <h1 className="text-2xl font-bold tracking-tight">{title}</h1>
+          <p className="mt-1 text-sm text-muted-foreground">{description}</p>
+        </div>
+
+        <div className="space-y-5 px-6 py-5">
+          <div className="flex gap-1 rounded-xl border border-border bg-muted/50 p-1">
+            {modes.map((m) => (
+              <button
+                key={m.id}
+                type="button"
+                onClick={() => switchMode(m.id)}
+                className={cn(
+                  "h-9 flex-1 rounded-lg text-sm font-medium transition-colors",
+                  mode === m.id
+                    ? "bg-primary text-primary-foreground shadow-sm shadow-primary/25"
+                    : "text-muted-foreground hover:text-foreground"
+                )}
+              >
+                {m.label}
+              </button>
+            ))}
+          </div>
+
           <form onSubmit={handleSubmit} className="space-y-4">
             {(mode === "signup" || mode === "retailer") && (
               <div className="space-y-2">
@@ -137,6 +181,7 @@ const Auth = () => {
                   value={fullName}
                   onChange={(e) => setFullName(e.target.value)}
                   required
+                  className="h-11"
                 />
               </div>
             )}
@@ -150,6 +195,7 @@ const Auth = () => {
                     placeholder="(555) 555-5555"
                     value={phone}
                     onChange={(e) => setPhone(e.target.value)}
+                    className="h-11"
                   />
                 </div>
                 <div className="space-y-2">
@@ -161,6 +207,7 @@ const Auth = () => {
                     value={requestedShopName}
                     onChange={(e) => setRequestedShopName(e.target.value)}
                     required
+                    className="h-11"
                   />
                 </div>
                 <div className="space-y-2">
@@ -171,6 +218,7 @@ const Auth = () => {
                     value={message}
                     onChange={(e) => setMessage(e.target.value)}
                     rows={2}
+                    className="resize-none"
                   />
                 </div>
               </>
@@ -184,6 +232,7 @@ const Auth = () => {
                 value={email}
                 onChange={(e) => setEmail(e.target.value)}
                 required
+                className="h-11"
               />
             </div>
             <div className="space-y-2">
@@ -196,70 +245,25 @@ const Auth = () => {
                 onChange={(e) => setPassword(e.target.value)}
                 required
                 minLength={6}
+                className="h-11"
               />
             </div>
-            <Button type="submit" className="w-full" disabled={loading}>
+            <Button
+              type="submit"
+              className="h-11 w-full shadow-sm shadow-primary/25"
+              disabled={loading}
+            >
               {loading
                 ? "Loading..."
                 : mode === "login"
-                  ? "Sign In"
+                  ? "Sign in"
                   : mode === "signup"
-                    ? "Sign Up"
-                    : "Submit Request"}
+                    ? "Create account"
+                    : "Submit request"}
             </Button>
           </form>
-
-          <div className="mt-4 space-y-2 text-center text-sm text-muted-foreground">
-            {mode === "login" ? (
-              <>
-                <button
-                  type="button"
-                  className="underline underline-offset-2 hover:text-foreground"
-                  onClick={() => switchMode("signup")}
-                >
-                  Need an account? Sign up
-                </button>
-                <div>
-                  <button
-                    type="button"
-                    className="underline underline-offset-2 hover:text-foreground"
-                    onClick={() => switchMode("retailer")}
-                  >
-                    Applying as a retailer?
-                  </button>
-                </div>
-              </>
-            ) : mode === "signup" ? (
-              <>
-                <button
-                  type="button"
-                  className="underline underline-offset-2 hover:text-foreground"
-                  onClick={() => switchMode("login")}
-                >
-                  Already have an account? Sign in
-                </button>
-                <div>
-                  <button
-                    type="button"
-                    className="underline underline-offset-2 hover:text-foreground"
-                    onClick={() => switchMode("retailer")}
-                  >
-                    Retailer signup instead
-                  </button>
-                </div>
-              </>
-            ) : (
-              <button
-                type="button"
-                className="underline underline-offset-2 hover:text-foreground"
-                onClick={() => switchMode("login")}
-              >
-                Back to sign in
-              </button>
-            )}
-          </div>
-        </CardContent>
-      </Card>
+        </div>
+      </div>
     </div>
   );
 };

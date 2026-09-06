@@ -63,12 +63,15 @@ export function MobileBottomNav() {
               onPointerDown={() => prefetch(item.prefetch)}
               onClick={() => navigate(item.path)}
               className={cn(
-                "flex flex-col items-center justify-center gap-0.5 text-[10px] font-medium transition-colors touch-manipulation",
+                "relative flex flex-col items-center justify-center gap-0.5 text-[10px] font-medium transition-colors touch-manipulation",
                 active ? "text-primary" : "text-muted-foreground"
               )}
             >
+              {active && (
+                <span className="absolute inset-x-6 top-0 h-0.5 rounded-full bg-primary" />
+              )}
               <item.icon className={cn("h-5 w-5", active && "stroke-[2.5px]")} />
-              {item.label}
+              <span className={cn(active && "font-semibold")}>{item.label}</span>
             </button>
           );
         })}

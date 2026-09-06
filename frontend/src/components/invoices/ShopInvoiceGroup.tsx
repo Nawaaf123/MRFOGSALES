@@ -72,16 +72,23 @@ export const ShopInvoiceGroup = ({
   const [legacyBalanceDialogOpen, setLegacyBalanceDialogOpen] = useState(false);
 
   const getStatusBadge = (status: string) => {
-    const variants: Record<string, "default" | "secondary" | "destructive"> = {
-      paid: "default",
-      partial: "secondary",
-      unpaid: "destructive",
-    };
-    const className =
-      status === "paid" ? "border-transparent bg-green-600 text-white hover:bg-green-600/80" : "";
+    if (status === "paid") {
+      return (
+        <Badge className="border-transparent bg-primary/15 text-primary hover:bg-primary/15 capitalize">
+          Paid
+        </Badge>
+      );
+    }
+    if (status === "partial") {
+      return (
+        <Badge variant="secondary" className="capitalize">
+          Partial
+        </Badge>
+      );
+    }
     return (
-      <Badge variant={variants[status] || "default"} className={className}>
-        {status.charAt(0).toUpperCase() + status.slice(1)}
+      <Badge variant="destructive" className="capitalize">
+        Unpaid
       </Badge>
     );
   };
@@ -161,8 +168,8 @@ export const ShopInvoiceGroup = ({
   };
 
   return (
-    <div className="border rounded-lg mb-4 bg-card shadow-sm">
-      <div className="bg-muted/70 p-3 md:p-4">
+    <div className="mb-4 overflow-hidden rounded-xl border border-primary/15 bg-card shadow-sm shadow-primary/5">
+      <div className="border-b border-primary/10 bg-gradient-to-r from-primary/[0.08] to-transparent p-3 md:p-4">
         <div className="flex items-start gap-2 md:gap-3">
           <Button
             variant="ghost"
@@ -178,7 +185,7 @@ export const ShopInvoiceGroup = ({
               <div className="min-w-0">
                 <h3 className="font-semibold text-base md:text-lg truncate">{shopName}</h3>
                 <p className="text-xs md:text-sm text-muted-foreground truncate">{shopLocation}</p>
-                <Badge variant="outline" className="mt-1">
+                <Badge className="mt-1 bg-primary/15 text-primary hover:bg-primary/15" variant="secondary">
                   {invoices.length} invoice(s)
                 </Badge>
               </div>
@@ -191,8 +198,8 @@ export const ShopInvoiceGroup = ({
                 <div className="text-left sm:text-right">
                   <p className="text-xs text-muted-foreground">Pending</p>
                   <p
-                    className={`text-lg md:text-xl font-bold ${
-                      totalPending > 0 ? "text-orange-600" : "text-green-600"
+                    className={`text-lg md:text-xl font-bold tabular-nums ${
+                      totalPending > 0 ? "text-primary" : "text-muted-foreground"
                     }`}
                   >
                     ${totalPending.toFixed(2)}
@@ -217,7 +224,7 @@ export const ShopInvoiceGroup = ({
                           onDistributePayment(shopId, shopName, invoicesWithPending, totalPending)
                         }
                         size="sm"
-                        className="flex-1 sm:flex-none h-10 bg-red-600 hover:bg-red-700 text-white"
+                        className="h-10 flex-1 sm:flex-none bg-primary text-primary-foreground hover:bg-primary/90"
                       >
                         <DollarSign className="h-4 w-4 mr-1" />
                         Pay
@@ -257,8 +264,8 @@ export const ShopInvoiceGroup = ({
                       <div>
                         <span className="text-muted-foreground">Pending</span>
                         <p
-                          className={`font-semibold ${
-                            pendingAmount > 0 ? "text-orange-600" : "text-green-600"
+                          className={`font-semibold tabular-nums ${
+                            pendingAmount > 0 ? "text-primary" : "text-muted-foreground"
                           }`}
                         >
                           ${pendingAmount.toFixed(2)}
@@ -301,7 +308,7 @@ export const ShopInvoiceGroup = ({
                       <TableCell>
                         <span
                           className={`font-semibold ${
-                            pendingAmount > 0 ? "text-orange-600" : "text-green-600"
+                            pendingAmount > 0 ? "text-primary" : "text-muted-foreground"
                           }`}
                         >
                           ${pendingAmount.toFixed(2)}

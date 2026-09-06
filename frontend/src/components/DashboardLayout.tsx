@@ -109,7 +109,7 @@ export const DashboardLayout = ({ children }: { children?: React.ReactNode }) =>
                   variant={isActiveRoute(item.path) ? "default" : "ghost"}
                   size="sm"
                   onClick={() => handleNavigation(item.path)}
-                  className="gap-2"
+                  className={cn("gap-2", isActiveRoute(item.path) && "shadow-sm shadow-primary/25")}
                 >
                   <item.icon className="h-4 w-4" />
                   <span>{item.label}</span>

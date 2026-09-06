@@ -60,6 +60,7 @@ class UserUpdate(BaseModel):
 class ProductCreate(BaseModel):
     name: str
     sku: str | None = None
+    barcode: str | None = None
     category: str = "General"
     subcategory: str | None = None
     sub_subcategory: str | None = None
@@ -74,6 +75,7 @@ class ProductCreate(BaseModel):
 class ProductUpdate(BaseModel):
     name: str | None = None
     sku: str | None = None
+    barcode: str | None = None
     category: str | None = None
     subcategory: str | None = None
     sub_subcategory: str | None = None
@@ -89,6 +91,7 @@ class ProductOut(ORMModel):
     id: UUID
     name: str
     sku: str | None = None
+    barcode: str | None = None
     category: str
     subcategory: str | None
     sub_subcategory: str | None
@@ -106,6 +109,7 @@ class ProductBrief(ORMModel):
     id: UUID
     name: str
     sku: str | None = None
+    barcode: str | None = None
     category: str
     subcategory: str | None = None
     price: float

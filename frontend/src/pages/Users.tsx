@@ -39,7 +39,9 @@ import {
 import { useAuth, AuthUser } from "@/lib/auth";
 import { api, ApiError } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
-import { Edit, Plus, Power } from "lucide-react";
+import { PageHero } from "@/components/ui/PageHero";
+import { cn } from "@/lib/utils";
+import { Edit, Plus, Power, Users as UsersIcon } from "lucide-react";
 
 type AppUser = AuthUser;
 
@@ -164,30 +166,51 @@ const Users = () => {
     });
   };
 
+  const roleCounts = {
+    admin: users.filter((u) => u.role === "admin").length,
+    sales: users.filter((u) => u.role === "sales").length,
+    srour: users.filter((u) => u.role === "srour").length,
+    retailer: users.filter((u) => u.role === "retailer").length,
+  };
+
+  const initials = (name: string) =>
+    name
+      .split(" ")
+      .filter(Boolean)
+      .slice(0, 2)
+      .map((p) => p[0]?.toUpperCase() || "")
+      .join("") || "?";
+
   return (
     <>
       <div className="space-y-4">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h1 className="text-2xl font-bold">Users</h1>
-            <p className="text-muted-foreground">Manage team accounts, roles, and warehouses</p>
-          </div>
-          <Button
-            className="w-full sm:w-auto h-11"
-            onClick={() => {
-              setCreateForm(emptyCreate);
-              setCreateOpen(true);
-            }}
-          >
-            <Plus className="h-4 w-4 mr-2" />
-            Add User
-          </Button>
-        </div>
+        <PageHero
+          icon={UsersIcon}
+          title="Users"
+          description="Team accounts, roles, and warehouses"
+          stats={[
+            { label: "Total", value: users.length, accent: true },
+            { label: "Sales", value: roleCounts.sales },
+            { label: "Admin", value: roleCounts.admin },
+          ]}
+          action={
+            <Button
+              className="h-11 w-full shadow-sm shadow-primary/25 sm:w-auto"
+              onClick={() => {
+                setCreateForm(emptyCreate);
+                setCreateOpen(true);
+              }}
+            >
+              <Plus className="mr-2 h-4 w-4" />
+              Add User
+            </Button>
+          }
+        />
 
-        <div className="rounded-md border overflow-x-auto">
+        <div className="overflow-x-auto rounded-xl border border-primary/10">
           <Table>
             <TableHeader>
-              <TableRow>
+              <TableRow className="bg-muted/40 hover:bg-muted/40">
                 <TableHead>Name</TableHead>
                 <TableHead>Email</TableHead>
                 <TableHead>Role</TableHead>
@@ -199,7 +222,7 @@ const Users = () => {
             <TableBody>
               {isLoading ? (
                 <TableRow>
-                  <TableCell colSpan={6}>Loading...</TableCell>
+                  <TableCell colSpan={6}>Loading…</TableCell>
                 </TableRow>
               ) : users.length === 0 ? (
                 <TableRow>
@@ -208,12 +231,38 @@ const Users = () => {
               ) : (
                 users.map((item) => (
                   <TableRow key={item.id} className={!item.is_active ? "opacity-60" : undefined}>
-                    <TableCell className="font-medium">{item.full_name}</TableCell>
+                    <TableCell>
+                      <div className="flex items-center gap-3">
+                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-primary/15 text-xs font-bold text-primary">
+                          {initials(item.full_name)}
+                        </span>
+                        <span className="font-medium">{item.full_name}</span>
+                      </div>
+                    </TableCell>
                     <TableCell>{item.email}</TableCell>
-                    <TableCell className="capitalize">{item.role}</TableCell>
+                    <TableCell>
+                      <Badge
+                        className={cn(
+                          "capitalize",
+                          item.role === "admin"
+                            ? "bg-primary/15 text-primary hover:bg-primary/15"
+                            : "bg-muted text-muted-foreground hover:bg-muted"
+                        )}
+                        variant="secondary"
+                      >
+                        {item.role}
+                      </Badge>
+                    </TableCell>
                     <TableCell>{item.assigned_warehouse}</TableCell>
                     <TableCell>
-                      <Badge variant={item.is_active ? "default" : "secondary"}>
+                      <Badge
+                        className={cn(
+                          item.is_active
+                            ? "bg-primary/15 text-primary hover:bg-primary/15"
+                            : "bg-muted text-muted-foreground hover:bg-muted"
+                        )}
+                        variant="secondary"
+                      >
                         {item.is_active ? "Active" : "Inactive"}
                       </Badge>
                     </TableCell>
@@ -243,14 +292,17 @@ const Users = () => {
       </div>
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Create User</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-3">
+        <DialogContent className="overflow-hidden p-0 sm:max-w-lg">
+          <div className="border-b border-primary/10 bg-gradient-to-r from-primary/15 to-transparent px-6 py-5">
+            <DialogHeader>
+              <DialogTitle>Create user</DialogTitle>
+            </DialogHeader>
+          </div>
+          <div className="space-y-3 px-6 py-5">
             <div className="space-y-2">
               <Label>Full name *</Label>
               <Input
+                className="h-11"
                 value={createForm.full_name}
                 onChange={(e) => setCreateForm({ ...createForm, full_name: e.target.value })}
               />
@@ -259,6 +311,7 @@ const Users = () => {
               <Label>Email *</Label>
               <Input
                 type="email"
+                className="h-11"
                 value={createForm.email}
                 onChange={(e) => setCreateForm({ ...createForm, email: e.target.value })}
               />
@@ -267,6 +320,7 @@ const Users = () => {
               <Label>Password *</Label>
               <Input
                 type="password"
+                className="h-11"
                 value={createForm.password}
                 onChange={(e) => setCreateForm({ ...createForm, password: e.target.value })}
               />
@@ -278,7 +332,7 @@ const Users = () => {
                   value={createForm.role}
                   onValueChange={(v) => setCreateForm({ ...createForm, role: v as Role })}
                 >
-                  <SelectTrigger>
+                  <SelectTrigger className="h-11">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -297,7 +351,7 @@ const Users = () => {
                     setCreateForm({ ...createForm, assigned_warehouse: v as Warehouse })
                   }
                 >
-                  <SelectTrigger>
+                  <SelectTrigger className="h-11">
                     <SelectValue />
                   </SelectTrigger>
                   <SelectContent>
@@ -328,15 +382,18 @@ const Users = () => {
           }
         }}
       >
-        <DialogContent>
-          <DialogHeader>
-            <DialogTitle>Edit User</DialogTitle>
-          </DialogHeader>
+        <DialogContent className="overflow-hidden p-0 sm:max-w-lg">
+          <div className="border-b border-primary/10 bg-gradient-to-r from-primary/15 to-transparent px-6 py-5">
+            <DialogHeader>
+              <DialogTitle>Edit user</DialogTitle>
+            </DialogHeader>
+          </div>
           {editForm && (
-            <div className="space-y-3">
+            <div className="space-y-3 px-6 py-5">
               <div className="space-y-2">
                 <Label>Full name</Label>
                 <Input
+                  className="h-11"
                   value={editForm.full_name}
                   onChange={(e) => setEditForm({ ...editForm, full_name: e.target.value })}
                 />
@@ -349,7 +406,7 @@ const Users = () => {
                     value={editForm.role}
                     onValueChange={(v) => setEditForm({ ...editForm, role: v as Role })}
                   >
-                    <SelectTrigger>
+                    <SelectTrigger className="h-11">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>
@@ -368,7 +425,7 @@ const Users = () => {
                       setEditForm({ ...editForm, assigned_warehouse: v as Warehouse })
                     }
                   >
-                    <SelectTrigger>
+                    <SelectTrigger className="h-11">
                       <SelectValue />
                     </SelectTrigger>
                     <SelectContent>

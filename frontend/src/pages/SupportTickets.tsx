@@ -11,26 +11,22 @@ import {
   DialogContent,
   DialogHeader,
   DialogTitle,
+  DialogDescription,
 } from "@/components/ui/dialog";
-import {
-  Select,
-  SelectContent,
-  SelectItem,
-  SelectTrigger,
-  SelectValue,
-} from "@/components/ui/select";
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from "@/components/ui/table";
 import { useAuth } from "@/lib/auth";
 import { api, ApiError } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
-import { CheckCircle2, LifeBuoy, Plus } from "lucide-react";
+import { cn } from "@/lib/utils";
+import {
+  CheckCircle2,
+  CircleDot,
+  Clock,
+  LifeBuoy,
+  MessageSquareText,
+  Plus,
+  Sparkles,
+  UserRound,
+} from "lucide-react";
 
 type SupportTicket = {
   id: string;
@@ -52,7 +48,12 @@ const emptyCreate = { subject: "", body: "" };
 const formatWhen = (value: string | null) => {
   if (!value) return "—";
   try {
-    return new Date(value).toLocaleString();
+    return new Date(value).toLocaleString(undefined, {
+      month: "short",
+      day: "numeric",
+      hour: "numeric",
+      minute: "2-digit",
+    });
   } catch {
     return value;
   }
@@ -84,6 +85,7 @@ const SupportTickets = () => {
   }, [tickets, statusFilter]);
 
   const openCount = tickets.filter((t) => t.status === "open").length;
+  const resolvedCount = tickets.filter((t) => t.status === "resolved").length;
 
   const createMutation = useMutation({
     mutationFn: () => {
@@ -135,137 +137,241 @@ const SupportTickets = () => {
     return <Navigate to="/dashboard" replace />;
   }
 
+  const filters: { id: "all" | "open" | "resolved"; label: string; count: number }[] = [
+    { id: "all", label: "All", count: tickets.length },
+    { id: "open", label: "Open", count: openCount },
+    { id: "resolved", label: "Resolved", count: resolvedCount },
+  ];
+
   return (
     <>
-      <div className="space-y-4">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h1 className="text-2xl font-bold flex items-center gap-2">
-              <LifeBuoy className="h-6 w-6" />
-              Support
-            </h1>
-            <p className="text-muted-foreground">
-              {isAdmin
-                ? "Review issues from the sales team and add resolutions"
-                : "Report an issue and track when it gets resolved"}
-            </p>
+      <div className="space-y-5">
+        {/* Hero band */}
+        <section className="relative overflow-hidden rounded-2xl border border-primary/15 bg-gradient-to-br from-primary/[0.12] via-white to-white px-4 py-5 sm:px-6 sm:py-6">
+          <div
+            aria-hidden
+            className="pointer-events-none absolute -right-10 -top-12 h-40 w-40 rounded-full bg-primary/20 blur-2xl"
+          />
+          <div
+            aria-hidden
+            className="pointer-events-none absolute -bottom-16 right-16 h-36 w-36 rounded-full bg-primary/10 blur-2xl"
+          />
+
+          <div className="relative flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
+            <div className="flex items-start gap-3">
+              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm shadow-primary/30">
+                <LifeBuoy className="h-6 w-6" />
+              </div>
+              <div>
+                <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">Support</h1>
+                <p className="mt-1 max-w-md text-sm text-muted-foreground">
+                  {isAdmin
+                    ? "See what the team needs help with, then leave a clear resolution."
+                    : "Stuck on something? Send it here — we'll reply with a fix when ready."}
+                </p>
+              </div>
+            </div>
+
+            <Button
+              className="h-11 w-full shrink-0 shadow-sm shadow-primary/25 sm:w-auto"
+              onClick={() => {
+                setCreateForm(emptyCreate);
+                setCreateOpen(true);
+              }}
+            >
+              <Plus className="mr-2 h-4 w-4" />
+              New request
+            </Button>
           </div>
-          <Button
-            className="w-full sm:w-auto h-11"
-            onClick={() => {
-              setCreateForm(emptyCreate);
-              setCreateOpen(true);
-            }}
-          >
-            <Plus className="h-4 w-4 mr-2" />
-            New request
-          </Button>
+
+          <div className="relative mt-5 grid grid-cols-2 gap-3 sm:max-w-md">
+            <div className="rounded-xl border border-primary/10 bg-white/80 px-3 py-3 backdrop-blur-sm">
+              <div className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-primary">
+                <CircleDot className="h-3.5 w-3.5" />
+                Open
+              </div>
+              <p className="mt-1 text-2xl font-bold tabular-nums text-foreground">{openCount}</p>
+            </div>
+            <div className="rounded-xl border border-border bg-white/80 px-3 py-3 backdrop-blur-sm">
+              <div className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
+                <CheckCircle2 className="h-3.5 w-3.5" />
+                Resolved
+              </div>
+              <p className="mt-1 text-2xl font-bold tabular-nums text-foreground">{resolvedCount}</p>
+            </div>
+          </div>
+        </section>
+
+        {/* Filters */}
+        <div className="flex gap-2 overflow-x-auto pb-1">
+          {filters.map((f) => (
+            <button
+              key={f.id}
+              type="button"
+              onClick={() => setStatusFilter(f.id)}
+              className={cn(
+                "inline-flex h-10 shrink-0 items-center gap-2 rounded-lg border px-3.5 text-sm font-medium transition-colors",
+                statusFilter === f.id
+                  ? "border-primary bg-primary text-primary-foreground"
+                  : "border-border bg-card text-muted-foreground hover:border-primary/40 hover:text-foreground"
+              )}
+            >
+              {f.label}
+              <span
+                className={cn(
+                  "rounded-md px-1.5 py-0.5 text-xs tabular-nums",
+                  statusFilter === f.id ? "bg-white/20" : "bg-muted text-muted-foreground"
+                )}
+              >
+                {f.count}
+              </span>
+            </button>
+          ))}
         </div>
 
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <p className="text-sm text-muted-foreground">
-            {isAdmin ? `${openCount} open` : `${tickets.length} of your requests`}
-          </p>
-          <Select
-            value={statusFilter}
-            onValueChange={(v) => setStatusFilter(v as "all" | "open" | "resolved")}
-          >
-            <SelectTrigger className="w-full sm:w-[160px] h-11">
-              <SelectValue placeholder="Filter" />
-            </SelectTrigger>
-            <SelectContent>
-              <SelectItem value="all">All</SelectItem>
-              <SelectItem value="open">Open</SelectItem>
-              <SelectItem value="resolved">Resolved</SelectItem>
-            </SelectContent>
-          </Select>
-        </div>
-
-        <div className="rounded-md border overflow-x-auto">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Subject</TableHead>
-                {isAdmin && <TableHead>From</TableHead>}
-                <TableHead>Status</TableHead>
-                <TableHead>Submitted</TableHead>
-                <TableHead className="text-right">Actions</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {isLoading ? (
-                <TableRow>
-                  <TableCell colSpan={isAdmin ? 5 : 4} className="text-muted-foreground">
-                    Loading…
-                  </TableCell>
-                </TableRow>
-              ) : filtered.length === 0 ? (
-                <TableRow>
-                  <TableCell colSpan={isAdmin ? 5 : 4} className="text-muted-foreground">
-                    No support requests yet
-                  </TableCell>
-                </TableRow>
-              ) : (
-                filtered.map((ticket) => (
-                  <TableRow key={ticket.id}>
-                    <TableCell className="font-medium max-w-[220px]">
-                      <button
-                        type="button"
-                        className="text-left hover:underline"
-                        onClick={() => setViewing(ticket)}
-                      >
-                        {ticket.subject}
-                      </button>
-                    </TableCell>
-                    {isAdmin && (
-                      <TableCell className="text-sm">
-                        <div>{ticket.created_by_name || "—"}</div>
-                        <div className="text-muted-foreground truncate max-w-[160px]">
-                          {ticket.created_by_email}
-                        </div>
-                      </TableCell>
+        {/* Ticket list */}
+        <div className="space-y-3">
+          {isLoading ? (
+            <div className="space-y-3">
+              {[0, 1, 2].map((i) => (
+                <div
+                  key={i}
+                  className="h-[5.5rem] animate-pulse rounded-xl border border-border bg-muted/60"
+                />
+              ))}
+            </div>
+          ) : filtered.length === 0 ? (
+            <div className="flex flex-col items-center justify-center rounded-2xl border border-dashed border-primary/25 bg-gradient-to-b from-primary/[0.06] to-transparent px-6 py-14 text-center">
+              <div className="mb-3 flex h-14 w-14 items-center justify-center rounded-2xl bg-primary/10 text-primary">
+                <Sparkles className="h-7 w-7" />
+              </div>
+              <p className="text-base font-semibold">No requests here</p>
+              <p className="mt-1 max-w-sm text-sm text-muted-foreground">
+                {statusFilter === "open"
+                  ? "Nothing open right now — nice work."
+                  : statusFilter === "resolved"
+                    ? "No resolved tickets in this view yet."
+                    : "Tap New request when you need help."}
+              </p>
+              {statusFilter === "all" && (
+                <Button
+                  className="mt-5 h-11"
+                  onClick={() => {
+                    setCreateForm(emptyCreate);
+                    setCreateOpen(true);
+                  }}
+                >
+                  <Plus className="mr-2 h-4 w-4" />
+                  New request
+                </Button>
+              )}
+            </div>
+          ) : (
+            filtered.map((ticket) => {
+              const isOpen = ticket.status === "open";
+              return (
+                <article
+                  key={ticket.id}
+                  className={cn(
+                    "group relative overflow-hidden rounded-xl border bg-card transition-all duration-200",
+                    "hover:border-primary/35 hover:shadow-md hover:shadow-primary/10",
+                    isOpen ? "border-primary/20" : "border-border"
+                  )}
+                >
+                  <div
+                    className={cn(
+                      "absolute inset-y-0 left-0 w-1",
+                      isOpen ? "bg-primary" : "bg-muted-foreground/30"
                     )}
-                    <TableCell>
-                      <Badge variant={ticket.status === "open" ? "default" : "secondary"}>
-                        {ticket.status}
-                      </Badge>
-                    </TableCell>
-                    <TableCell className="text-sm text-muted-foreground whitespace-nowrap">
-                      {formatWhen(ticket.created_at)}
-                    </TableCell>
-                    <TableCell className="text-right">
-                      <div className="flex justify-end gap-2">
-                        <Button variant="outline" size="sm" onClick={() => setViewing(ticket)}>
-                          View
-                        </Button>
-                        {isAdmin && ticket.status === "open" && (
-                          <Button
-                            size="sm"
-                            onClick={() => {
-                              setResolving(ticket);
-                              setResolution("");
-                            }}
-                          >
-                            <CheckCircle2 className="h-4 w-4 mr-1" />
-                            Resolve
-                          </Button>
+                  />
+                  <div className="flex flex-col gap-3 p-4 pl-5 sm:flex-row sm:items-center sm:justify-between">
+                    <button
+                      type="button"
+                      className="min-w-0 flex-1 text-left"
+                      onClick={() => setViewing(ticket)}
+                    >
+                      <div className="flex flex-wrap items-center gap-2">
+                        <h2 className="truncate text-base font-semibold group-hover:text-primary">
+                          {ticket.subject}
+                        </h2>
+                        <Badge
+                          className={cn(
+                            "capitalize",
+                            isOpen
+                              ? "bg-primary/15 text-primary hover:bg-primary/15"
+                              : "bg-muted text-muted-foreground hover:bg-muted"
+                          )}
+                          variant="secondary"
+                        >
+                          {ticket.status}
+                        </Badge>
+                      </div>
+                      <p className="mt-1 line-clamp-2 text-sm text-muted-foreground">{ticket.body}</p>
+                      <div className="mt-2 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-muted-foreground">
+                        <span className="inline-flex items-center gap-1">
+                          <Clock className="h-3.5 w-3.5" />
+                          {formatWhen(ticket.created_at)}
+                        </span>
+                        {isAdmin && (
+                          <span className="inline-flex items-center gap-1">
+                            <UserRound className="h-3.5 w-3.5" />
+                            {ticket.created_by_name || ticket.created_by_email || "Unknown"}
+                          </span>
+                        )}
+                        {ticket.resolution && (
+                          <span className="inline-flex items-center gap-1 text-primary">
+                            <MessageSquareText className="h-3.5 w-3.5" />
+                            Has resolution
+                          </span>
                         )}
                       </div>
-                    </TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
+                    </button>
+
+                    <div className="flex shrink-0 gap-2 sm:flex-col sm:items-stretch lg:flex-row">
+                      <Button
+                        variant="outline"
+                        size="sm"
+                        className="h-10 flex-1 sm:flex-none"
+                        onClick={() => setViewing(ticket)}
+                      >
+                        View
+                      </Button>
+                      {isAdmin && isOpen && (
+                        <Button
+                          size="sm"
+                          className="h-10 flex-1 sm:flex-none"
+                          onClick={() => {
+                            setResolving(ticket);
+                            setResolution("");
+                          }}
+                        >
+                          <CheckCircle2 className="mr-1.5 h-4 w-4" />
+                          Resolve
+                        </Button>
+                      )}
+                    </div>
+                  </div>
+                </article>
+              );
+            })
+          )}
         </div>
       </div>
 
       <Dialog open={createOpen} onOpenChange={setCreateOpen}>
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>New support request</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4">
+        <DialogContent className="overflow-hidden p-0 sm:max-w-lg">
+          <div className="border-b border-primary/10 bg-gradient-to-r from-primary/15 to-transparent px-6 py-5">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2 text-xl">
+                <LifeBuoy className="h-5 w-5 text-primary" />
+                New support request
+              </DialogTitle>
+              <DialogDescription>
+                Describe the problem clearly so we can fix it faster.
+              </DialogDescription>
+            </DialogHeader>
+          </div>
+          <div className="space-y-4 px-6 py-5">
             <div className="space-y-2">
               <Label htmlFor="support-subject">Subject</Label>
               <Input
@@ -284,46 +390,66 @@ const SupportTickets = () => {
                 onChange={(e) => setCreateForm((f) => ({ ...f, body: e.target.value }))}
                 placeholder="What went wrong? Which shop/invoice? What did you try?"
                 rows={5}
+                className="resize-none"
               />
             </div>
             <Button
-              className="w-full h-11"
+              className="h-11 w-full"
               disabled={createMutation.isPending}
               onClick={() => createMutation.mutate()}
             >
-              {createMutation.isPending ? "Submitting…" : "Submit"}
+              {createMutation.isPending ? "Submitting…" : "Submit request"}
             </Button>
           </div>
         </DialogContent>
       </Dialog>
 
       <Dialog open={!!viewing} onOpenChange={(open) => !open && setViewing(null)}>
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>{viewing?.subject}</DialogTitle>
-          </DialogHeader>
+        <DialogContent className="overflow-hidden p-0 sm:max-w-lg">
+          <div className="border-b border-primary/10 bg-gradient-to-r from-primary/15 to-transparent px-6 py-5">
+            <DialogHeader>
+              <DialogTitle className="pr-6 text-xl leading-snug">{viewing?.subject}</DialogTitle>
+              {viewing && (
+                <DialogDescription className="flex flex-wrap items-center gap-2 pt-1">
+                  <Badge
+                    className={cn(
+                      "capitalize",
+                      viewing.status === "open"
+                        ? "bg-primary/15 text-primary hover:bg-primary/15"
+                        : "bg-muted text-muted-foreground hover:bg-muted"
+                    )}
+                    variant="secondary"
+                  >
+                    {viewing.status}
+                  </Badge>
+                  <span>{formatWhen(viewing.created_at)}</span>
+                </DialogDescription>
+              )}
+            </DialogHeader>
+          </div>
           {viewing && (
-            <div className="space-y-4 text-sm">
-              <div className="flex items-center gap-2">
-                <Badge variant={viewing.status === "open" ? "default" : "secondary"}>
-                  {viewing.status}
-                </Badge>
-                <span className="text-muted-foreground">{formatWhen(viewing.created_at)}</span>
-              </div>
+            <div className="space-y-4 px-6 py-5 text-sm">
               {isAdmin && (
-                <p className="text-muted-foreground">
-                  From {viewing.created_by_name} ({viewing.created_by_email})
+                <p className="inline-flex items-center gap-1.5 text-muted-foreground">
+                  <UserRound className="h-4 w-4" />
+                  {viewing.created_by_name} · {viewing.created_by_email}
                 </p>
               )}
-              <div>
-                <p className="font-medium mb-1">Issue</p>
-                <p className="whitespace-pre-wrap text-muted-foreground">{viewing.body}</p>
+              <div className="rounded-xl border border-border bg-muted/40 p-4">
+                <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+                  Issue
+                </p>
+                <p className="whitespace-pre-wrap leading-relaxed text-foreground">{viewing.body}</p>
               </div>
               {viewing.resolution && (
-                <div>
-                  <p className="font-medium mb-1">Resolution</p>
-                  <p className="whitespace-pre-wrap text-muted-foreground">{viewing.resolution}</p>
-                  <p className="text-xs text-muted-foreground mt-2">
+                <div className="rounded-xl border border-primary/20 bg-primary/[0.06] p-4">
+                  <p className="mb-1.5 text-xs font-semibold uppercase tracking-wide text-primary">
+                    Resolution
+                  </p>
+                  <p className="whitespace-pre-wrap leading-relaxed text-foreground">
+                    {viewing.resolution}
+                  </p>
+                  <p className="mt-2 text-xs text-muted-foreground">
                     {viewing.resolved_by_name ? `By ${viewing.resolved_by_name} · ` : ""}
                     {formatWhen(viewing.resolved_at)}
                   </p>
@@ -331,14 +457,15 @@ const SupportTickets = () => {
               )}
               {isAdmin && viewing.status === "open" && (
                 <Button
-                  className="w-full h-11"
+                  className="h-11 w-full"
                   onClick={() => {
                     setViewing(null);
                     setResolving(viewing);
                     setResolution("");
                   }}
                 >
-                  Resolve
+                  <CheckCircle2 className="mr-2 h-4 w-4" />
+                  Resolve this
                 </Button>
               )}
             </div>
@@ -355,24 +482,30 @@ const SupportTickets = () => {
           }
         }}
       >
-        <DialogContent className="sm:max-w-lg">
-          <DialogHeader>
-            <DialogTitle>Resolve: {resolving?.subject}</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4">
-            <p className="text-sm text-muted-foreground whitespace-pre-wrap">{resolving?.body}</p>
+        <DialogContent className="overflow-hidden p-0 sm:max-w-lg">
+          <div className="border-b border-primary/10 bg-gradient-to-r from-primary/15 to-transparent px-6 py-5">
+            <DialogHeader>
+              <DialogTitle className="text-xl">Resolve request</DialogTitle>
+              <DialogDescription className="line-clamp-2">{resolving?.subject}</DialogDescription>
+            </DialogHeader>
+          </div>
+          <div className="space-y-4 px-6 py-5">
+            <div className="rounded-xl border border-border bg-muted/40 p-3 text-sm text-muted-foreground">
+              <p className="whitespace-pre-wrap">{resolving?.body}</p>
+            </div>
             <div className="space-y-2">
-              <Label htmlFor="support-resolution">Resolution</Label>
+              <Label htmlFor="support-resolution">Your resolution</Label>
               <Textarea
                 id="support-resolution"
                 value={resolution}
                 onChange={(e) => setResolution(e.target.value)}
                 placeholder="What fixed it / what should the sales person do?"
                 rows={4}
+                className="resize-none"
               />
             </div>
             <Button
-              className="w-full h-11"
+              className="h-11 w-full"
               disabled={resolveMutation.isPending}
               onClick={() => resolveMutation.mutate()}
             >

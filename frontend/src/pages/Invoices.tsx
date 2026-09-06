@@ -63,8 +63,11 @@ import { generateInvoicePDF, saveInvoicePDF } from "@/lib/pdfGenerator";
 import { CreditDialog } from "@/components/invoices/CreditDialog";
 import { DistributePaymentDialog } from "@/components/invoices/DistributePaymentDialog";
 import { ShopInvoiceGroup } from "@/components/invoices/ShopInvoiceGroup";
+import { PageHero } from "@/components/ui/PageHero";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { BarcodeScanDialog } from "@/components/products/BarcodeScanDialog";
 import { cn } from "@/lib/utils";
-import { Check, ChevronsUpDown, Plus, Sparkles, Trash2 } from "lucide-react";
+import { Check, ChevronsUpDown, FileText, Plus, ScanBarcode, Sparkles, Trash2 } from "lucide-react";
 
 type Shop = {
   id: string;
@@ -76,6 +79,7 @@ type Product = {
   id: string;
   name: string;
   sku?: string | null;
+  barcode?: string | null;
   price: number;
   is_active: boolean;
   category: string;
@@ -219,6 +223,7 @@ const Invoices = () => {
   const [createSubcategoryFilter, setCreateSubcategoryFilter] = useState("all");
   const [createCategoryOpen, setCreateCategoryOpen] = useState(false);
   const [createSubcategoryOpen, setCreateSubcategoryOpen] = useState(false);
+  const [barcodeScanOpen, setBarcodeScanOpen] = useState(false);
   const [cashAmount, setCashAmount] = useState("");
   const [checkAmount, setCheckAmount] = useState("");
   const [creditAmount, setCreditAmount] = useState("");
@@ -300,6 +305,7 @@ const Invoices = () => {
       return (
         p.name.toLowerCase().includes(q) ||
         (p.sku || "").toLowerCase().includes(q) ||
+        (p.barcode || "").toLowerCase().includes(q) ||
         p.category.toLowerCase().includes(q) ||
         (p.subcategory || "").toLowerCase().includes(q)
       );
@@ -523,6 +529,29 @@ const Invoices = () => {
         },
       ];
     });
+  };
+
+  const findProductByCode = (raw: string) => {
+    const code = raw.trim().toLowerCase();
+    if (!code) return null;
+    const byBarcode = products.find((p) => (p.barcode || "").trim().toLowerCase() === code);
+    if (byBarcode) return byBarcode;
+    return products.find((p) => (p.sku || "").trim().toLowerCase() === code) || null;
+  };
+
+  const applyScannedCode = (raw: string) => {
+    const product = findProductByCode(raw);
+    if (!product) {
+      toast({
+        title: "No product found",
+        description: `No barcode/SKU match for “${raw.trim()}”`,
+        variant: "destructive",
+      });
+      return;
+    }
+    addProductQuick(product);
+    setProductSearch("");
+    toast({ title: "Added", description: product.name });
   };
 
   const updateLine = (index: number, field: "quantity" | "unit_price", value: number) => {
@@ -825,27 +854,51 @@ const Invoices = () => {
   return (
     <>
       <div className="space-y-4">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h1 className="text-2xl font-bold">Invoices</h1>
-            <p className="text-muted-foreground">Create invoices, track balances, and record payments</p>
-          </div>
-          {canCreate && (
-            <Button
-              className="w-full sm:w-auto h-11"
-              onClick={openCreateInvoice}
-            >
-              <Plus className="h-4 w-4 mr-2" />
-              New Invoice
-            </Button>
-          )}
-        </div>
+        <PageHero
+          icon={FileText}
+          title="Invoices"
+          description="Create invoices, track balances, and record payments"
+          stats={[
+            {
+              label: "Listed",
+              value: isLoading ? "…" : invoices.length,
+              accent: true,
+            },
+            {
+              label: "Unpaid",
+              value: isLoading
+                ? "…"
+                : invoices.filter((i) => i.payment_status === "unpaid").length,
+            },
+            {
+              label: "Open $",
+              value: isLoading
+                ? "…"
+                : `$${invoices
+                    .reduce(
+                      (sum, i) =>
+                        sum + Math.max(0, Number(i.total_amount) - Number(i.amount_paid || 0)),
+                      0
+                    )
+                    .toFixed(0)}`,
+            },
+          ]}
+          action={
+            canCreate ? (
+              <Button className="h-11 w-full shadow-sm shadow-primary/25 sm:w-auto" onClick={openCreateInvoice}>
+                <Plus className="mr-2 h-4 w-4" />
+                New Invoice
+              </Button>
+            ) : undefined
+          }
+        />
 
-        <Card className="p-4">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        <Card className="border-primary/10 p-4">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
             <div className="space-y-2">
               <Label>Search</Label>
               <Input
+                className="h-11"
                 placeholder="Invoice #, shop, city..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
@@ -854,7 +907,7 @@ const Invoices = () => {
             <div className="space-y-2">
               <Label>Payment Status</Label>
               <Select value={statusFilter} onValueChange={setStatusFilter}>
-                <SelectTrigger>
+                <SelectTrigger className="h-11">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -868,7 +921,7 @@ const Invoices = () => {
             <div className="space-y-2">
               <Label>Shop</Label>
               <Select value={shopFilter} onValueChange={setShopFilter}>
-                <SelectTrigger>
+                <SelectTrigger className="h-11">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -886,9 +939,25 @@ const Invoices = () => {
 
         <div className="space-y-2">
           {isLoading ? (
-            <p className="text-sm text-muted-foreground py-8 text-center">Loading...</p>
+            <div className="space-y-3">
+              {[0, 1, 2].map((i) => (
+                <div key={i} className="h-24 animate-pulse rounded-xl border border-border bg-muted/60" />
+              ))}
+            </div>
           ) : shopGroups.length === 0 ? (
-            <p className="text-sm text-muted-foreground py-8 text-center">No invoices found</p>
+            <EmptyState
+              icon={FileText}
+              title="No invoices found"
+              description="Try another search or status, or create a new invoice"
+              action={
+                canCreate ? (
+                  <Button className="h-11" onClick={openCreateInvoice}>
+                    <Plus className="mr-2 h-4 w-4" />
+                    New Invoice
+                  </Button>
+                ) : undefined
+              }
+            />
           ) : (
             shopGroups.map((group) => (
               <ShopInvoiceGroup
@@ -965,11 +1034,16 @@ const Invoices = () => {
           // Closing keeps the on-device draft; only success / explicit new form clears it.
         }}
       >
-        <DialogContent className="max-w-2xl w-[calc(100vw-1rem)] sm:w-full max-h-[90dvh] overflow-x-hidden overflow-y-auto p-3 sm:p-6">
-          <DialogHeader>
-            <DialogTitle>Create Invoice</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4 min-w-0 overflow-x-hidden">
+        <DialogContent className="max-h-[90dvh] w-[calc(100vw-1rem)] max-w-2xl overflow-x-hidden overflow-y-auto p-0 sm:w-full">
+          <div className="border-b border-primary/10 bg-gradient-to-r from-primary/15 to-transparent px-3 py-4 sm:px-6">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2 text-xl">
+                <FileText className="h-5 w-5 text-primary" />
+                Create Invoice
+              </DialogTitle>
+            </DialogHeader>
+          </div>
+          <div className="min-w-0 space-y-4 overflow-x-hidden p-3 sm:p-6">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-2 min-w-0">
                 <Label>Shop *</Label>
@@ -1027,12 +1101,34 @@ const Invoices = () => {
               </div>
 
               <div className="grid grid-cols-1 gap-2 min-w-0">
-                <Input
-                  placeholder="Search SKU or flavor..."
-                  value={productSearch}
-                  onChange={(e) => setProductSearch(e.target.value)}
-                  className="w-full min-w-0"
-                />
+                <div className="flex gap-2 min-w-0">
+                  <Input
+                    placeholder="Search SKU, barcode, or flavor… (scanner OK)"
+                    value={productSearch}
+                    onChange={(e) => setProductSearch(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key !== "Enter") return;
+                      const code = productSearch.trim();
+                      if (!code) return;
+                      // External Bluetooth scanners type the code then Enter
+                      if (findProductByCode(code)) {
+                        e.preventDefault();
+                        applyScannedCode(code);
+                      }
+                    }}
+                    className="w-full min-w-0 h-11 font-mono"
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-11 shrink-0 border-primary/30 px-3"
+                    title="Scan with camera"
+                    disabled={productsLoading || products.length === 0}
+                    onClick={() => setBarcodeScanOpen(true)}
+                  >
+                    <ScanBarcode className="h-5 w-5" />
+                  </Button>
+                </div>
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 min-w-0">
                 <Popover open={createCategoryOpen} onOpenChange={setCreateCategoryOpen}>
@@ -1418,17 +1514,25 @@ const Invoices = () => {
         </DialogContent>
       </Dialog>
 
+      <BarcodeScanDialog
+        open={barcodeScanOpen}
+        onOpenChange={setBarcodeScanOpen}
+        onScan={applyScannedCode}
+      />
+
       <Dialog open={!!paymentInvoice} onOpenChange={(open) => !open && setPaymentInvoice(null)}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Record Payment</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4">
+        <DialogContent className="max-w-md overflow-hidden p-0">
+          <div className="border-b border-primary/10 bg-gradient-to-r from-primary/15 to-transparent px-6 py-4">
+            <DialogHeader>
+              <DialogTitle>Record Payment</DialogTitle>
+            </DialogHeader>
+          </div>
+          <div className="space-y-4 p-6">
             <div>
               <p className="text-sm text-muted-foreground">
                 {paymentInvoice?.invoice_number} · {paymentInvoice?.shop?.name}
               </p>
-              <p className="text-2xl font-bold mt-1">${remainingForPayment.toFixed(2)}</p>
+              <p className="mt-1 text-2xl font-bold text-primary">${remainingForPayment.toFixed(2)}</p>
               <p className="text-xs text-muted-foreground">Remaining balance</p>
             </div>
             <div className="space-y-2">
@@ -1437,6 +1541,7 @@ const Invoices = () => {
                 type="number"
                 min="0.01"
                 step="0.01"
+                className="h-11"
                 value={payAmount}
                 onChange={(e) => setPayAmount(e.target.value)}
               />
@@ -1444,7 +1549,7 @@ const Invoices = () => {
             <div className="space-y-2">
               <Label>Method</Label>
               <Select value={payMethod} onValueChange={(v) => setPayMethod(v as PaymentMethod)}>
-                <SelectTrigger>
+                <SelectTrigger className="h-11">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -1458,6 +1563,7 @@ const Invoices = () => {
               <div className="space-y-2">
                 <Label>Check number</Label>
                 <Input
+                  className="h-11"
                   value={payCheckNumber}
                   onChange={(e) => setPayCheckNumber(e.target.value)}
                 />
@@ -1467,12 +1573,12 @@ const Invoices = () => {
               <Label>Notes</Label>
               <Textarea value={payNotes} onChange={(e) => setPayNotes(e.target.value)} rows={2} />
             </div>
-            <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
-              <Button variant="outline" className="w-full sm:w-auto h-11" onClick={() => setPaymentInvoice(null)}>
+            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <Button variant="outline" className="h-11 w-full sm:w-auto" onClick={() => setPaymentInvoice(null)}>
                 Cancel
               </Button>
               <Button
-                className="w-full sm:w-auto h-11"
+                className="h-11 w-full sm:w-auto"
                 disabled={paymentMutation.isPending}
                 onClick={() => paymentMutation.mutate()}
               >
@@ -1493,12 +1599,14 @@ const Invoices = () => {
       )}
 
       <Dialog open={!!viewInvoice} onOpenChange={(open) => !open && setViewInvoice(null)}>
-        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>{viewInvoice?.invoice_number}</DialogTitle>
-          </DialogHeader>
+        <DialogContent className="max-h-[85vh] max-w-lg overflow-hidden p-0">
+          <div className="border-b border-primary/10 bg-gradient-to-r from-primary/15 to-transparent px-6 py-4">
+            <DialogHeader>
+              <DialogTitle className="text-xl">{viewInvoice?.invoice_number}</DialogTitle>
+            </DialogHeader>
+          </div>
           {viewInvoice && (
-            <div className="space-y-4 text-sm">
+            <div className="max-h-[calc(85vh-5rem)] space-y-4 overflow-y-auto p-6 text-sm">
               <div className="flex items-center justify-between gap-2">
                 <div>
                   <p className="font-medium">{viewInvoice.shop?.name || "Unknown shop"}</p>

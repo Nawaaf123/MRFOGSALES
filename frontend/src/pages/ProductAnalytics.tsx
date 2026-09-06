@@ -31,8 +31,11 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { PageHero } from "@/components/ui/PageHero";
+import { FilterChips } from "@/components/ui/FilterChips";
 import { api } from "@/lib/api";
 import {
+  BarChart3,
   DollarSign,
   Download,
   FileText,
@@ -81,7 +84,7 @@ type DailySalesRow = {
   revenue: number;
 };
 
-const PIE_COLORS = ["#D95D4E", "#1F2937", "#64748B", "#F59E0B", "#10B981", "#3B82F6", "#8B5CF6", "#EC4899"];
+const PIE_COLORS = ["#D95D4E", "#1F2937", "#94A3B8", "#F07164", "#64748B", "#B91C1C", "#CBD5E1", "#7F1D1D"];
 
 function rangeForPreset(preset: DatePreset): { from: Date; to: Date } {
   const to = new Date();
@@ -164,6 +167,12 @@ const ProductAnalytics = () => {
     value: Number(c.total_revenue) || 0,
   }));
 
+  const paymentTotal =
+    (overview?.paid_count ?? 0) + (overview?.partial_count ?? 0) + (overview?.unpaid_count ?? 0) || 1;
+  const paidPct = ((overview?.paid_count ?? 0) / paymentTotal) * 100;
+  const partialPct = ((overview?.partial_count ?? 0) / paymentTotal) * 100;
+  const unpaidPct = ((overview?.unpaid_count ?? 0) / paymentTotal) * 100;
+
   const exportExcel = () => {
     const wb = XLSX.utils.book_new();
     const summary = [
@@ -231,232 +240,248 @@ const ProductAnalytics = () => {
   };
 
   return (
-    <>
-      <div className="space-y-6">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h1 className="text-2xl font-bold">Product Analytics</h1>
-            <p className="text-muted-foreground">
-              {format(from, "MMM d, yyyy")} – {format(to, "MMM d, yyyy")}
-            </p>
+    <div className="space-y-6">
+      <PageHero
+        icon={BarChart3}
+        title="Product Analytics"
+        description={`${format(from, "MMM d, yyyy")} – ${format(to, "MMM d, yyyy")}`}
+        stats={[
+          {
+            label: "Revenue",
+            value: overviewLoading ? "…" : `$${(overview?.revenue ?? 0).toFixed(0)}`,
+            accent: true,
+          },
+          {
+            label: "Invoices",
+            value: overviewLoading ? "…" : String(overview?.invoice_count ?? 0),
+          },
+          {
+            label: "Collected",
+            value: overviewLoading ? "…" : `${(overview?.collection_rate ?? 0).toFixed(0)}%`,
+          },
+        ]}
+        action={
+          <Button
+            variant="outline"
+            className="h-11 w-full border-primary/30 sm:w-auto"
+            onClick={exportExcel}
+          >
+            <Download className="mr-2 h-4 w-4" />
+            Export Excel
+          </Button>
+        }
+      />
+
+      <FilterChips
+        value={preset}
+        onChange={(id) => setPreset(id as DatePreset)}
+        items={PRESETS.map((p) => ({ id: p.id, label: p.label }))}
+      />
+
+      <div className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <StatsCard
+          title="Units sold"
+          value={overviewLoading ? "…" : String(overview?.units_sold ?? 0)}
+          icon={Package}
+        />
+        <StatsCard
+          title="Unique shops"
+          value={overviewLoading ? "…" : String(overview?.unique_shops ?? 0)}
+          icon={ShoppingBag}
+        />
+        <StatsCard
+          title="Avg invoice"
+          value={overviewLoading ? "…" : `$${(overview?.average_invoice ?? 0).toFixed(2)}`}
+          icon={FileText}
+        />
+        <StatsCard
+          title="Collected $"
+          value={overviewLoading ? "…" : `$${(overview?.collected ?? 0).toFixed(2)}`}
+          icon={DollarSign}
+          accent
+        />
+      </div>
+
+      <Card className="overflow-hidden border-primary/10">
+        <CardHeader className="border-b border-primary/10 bg-gradient-to-r from-primary/[0.07] to-transparent pb-3">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <Percent className="h-4 w-4 text-primary" />
+            Payment mix
+          </CardTitle>
+        </CardHeader>
+        <CardContent className="space-y-3 pt-4">
+          <div className="flex h-3 overflow-hidden rounded-full bg-muted">
+            <div className="bg-primary" style={{ width: `${paidPct}%` }} />
+            <div className="bg-primary/45" style={{ width: `${partialPct}%` }} />
+            <div className="bg-muted-foreground/35" style={{ width: `${unpaidPct}%` }} />
           </div>
-          <div className="flex flex-wrap gap-2">
-            {PRESETS.map((p) => (
-              <Button
-                key={p.id}
-                size="sm"
-                variant={preset === p.id ? "default" : "outline"}
-                onClick={() => setPreset(p.id)}
-              >
-                {p.label}
-              </Button>
-            ))}
-            <Button size="sm" variant="outline" onClick={exportExcel}>
-              <Download className="h-4 w-4 mr-2" />
-              Export Excel
-            </Button>
+          <div className="flex flex-wrap gap-4 text-sm text-muted-foreground">
+            <span>
+              <span className="font-semibold text-primary">{overview?.paid_count ?? 0}</span> paid
+            </span>
+            <span>
+              <span className="font-semibold text-foreground">{overview?.partial_count ?? 0}</span> partial
+            </span>
+            <span>
+              <span className="font-semibold text-foreground">{overview?.unpaid_count ?? 0}</span> unpaid
+            </span>
           </div>
-        </div>
+        </CardContent>
+      </Card>
 
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-          <StatsCard
-            title="Revenue"
-            value={overviewLoading ? "..." : `$${(overview?.revenue ?? 0).toFixed(2)}`}
-            icon={DollarSign}
-          />
-          <StatsCard
-            title="Invoices"
-            value={overviewLoading ? "..." : String(overview?.invoice_count ?? 0)}
-            icon={FileText}
-          />
-          <StatsCard
-            title="Units Sold"
-            value={overviewLoading ? "..." : String(overview?.units_sold ?? 0)}
-            icon={Package}
-          />
-          <StatsCard
-            title="Collection Rate"
-            value={overviewLoading ? "..." : `${(overview?.collection_rate ?? 0).toFixed(1)}%`}
-            icon={Percent}
-          />
-        </div>
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Card className="border-primary/10">
+          <CardHeader>
+            <CardTitle className="text-base">Daily revenue</CardTitle>
+          </CardHeader>
+          <CardContent className="h-[300px]">
+            {dailyLoading ? (
+              <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                Loading…
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <BarChart data={dailyChart}>
+                  <CartesianGrid strokeDasharray="3 3" vertical={false} />
+                  <XAxis dataKey="label" tick={{ fontSize: 11 }} />
+                  <YAxis tick={{ fontSize: 11 }} />
+                  <Tooltip />
+                  <Bar dataKey="revenue" fill="#D95D4E" radius={[4, 4, 0, 0]} />
+                </BarChart>
+              </ResponsiveContainer>
+            )}
+          </CardContent>
+        </Card>
 
-        <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-4">
-          <StatsCard
-            title="Collected"
-            value={overviewLoading ? "..." : `$${(overview?.collected ?? 0).toFixed(2)}`}
-            icon={DollarSign}
-          />
-          <StatsCard
-            title="Unique Shops"
-            value={overviewLoading ? "..." : String(overview?.unique_shops ?? 0)}
-            icon={ShoppingBag}
-          />
-          <StatsCard
-            title="Avg Invoice"
-            value={overviewLoading ? "..." : `$${(overview?.average_invoice ?? 0).toFixed(2)}`}
-            icon={FileText}
-          />
-          <StatsCard
-            title="Paid / Partial / Unpaid"
-            value={
-              overviewLoading
-                ? "..."
-                : `${overview?.paid_count ?? 0} / ${overview?.partial_count ?? 0} / ${overview?.unpaid_count ?? 0}`
-            }
-            icon={FileText}
-          />
-        </div>
+        <Card className="border-primary/10">
+          <CardHeader>
+            <CardTitle className="text-base">Revenue by category</CardTitle>
+          </CardHeader>
+          <CardContent className="h-[300px]">
+            {catLoading ? (
+              <div className="flex h-full items-center justify-center text-sm text-muted-foreground">
+                Loading…
+              </div>
+            ) : (
+              <ResponsiveContainer width="100%" height="100%">
+                <PieChart>
+                  <Pie
+                    data={categoryChart}
+                    dataKey="value"
+                    nameKey="name"
+                    cx="50%"
+                    cy="50%"
+                    innerRadius={55}
+                    outerRadius={95}
+                    paddingAngle={2}
+                  >
+                    {categoryChart.map((_, index) => (
+                      <Cell key={index} fill={PIE_COLORS[index % PIE_COLORS.length]} />
+                    ))}
+                  </Pie>
+                  <Tooltip />
+                  <Legend />
+                </PieChart>
+              </ResponsiveContainer>
+            )}
+          </CardContent>
+        </Card>
+      </div>
 
-        <div className="grid gap-4 lg:grid-cols-2">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Daily Revenue</CardTitle>
-            </CardHeader>
-            <CardContent className="h-[300px]">
-              {dailyLoading ? (
-                <p className="text-sm text-muted-foreground">Loading...</p>
-              ) : dailyChart.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No sales in this period</p>
-              ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <BarChart data={dailyChart}>
-                    <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-                    <XAxis dataKey="label" tick={{ fontSize: 11 }} />
-                    <YAxis tick={{ fontSize: 11 }} />
-                    <Tooltip
-                      formatter={(value: number) => [`$${Number(value).toFixed(2)}`, "Revenue"]}
-                    />
-                    <Bar dataKey="revenue" fill="#D95D4E" radius={[4, 4, 0, 0]} />
-                  </BarChart>
-                </ResponsiveContainer>
-              )}
-            </CardContent>
-          </Card>
-
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Revenue by Category</CardTitle>
-            </CardHeader>
-            <CardContent className="h-[300px]">
-              {catLoading ? (
-                <p className="text-sm text-muted-foreground">Loading...</p>
-              ) : categoryChart.length === 0 ? (
-                <p className="text-sm text-muted-foreground">No category data</p>
-              ) : (
-                <ResponsiveContainer width="100%" height="100%">
-                  <PieChart>
-                    <Pie
-                      data={categoryChart}
-                      dataKey="value"
-                      nameKey="name"
-                      cx="50%"
-                      cy="50%"
-                      outerRadius={90}
-                      label={({ name, percent }) =>
-                        `${name} (${((percent || 0) * 100).toFixed(0)}%)`
-                      }
-                    >
-                      {categoryChart.map((_, i) => (
-                        <Cell key={i} fill={PIE_COLORS[i % PIE_COLORS.length]} />
-                      ))}
-                    </Pie>
-                    <Tooltip formatter={(value: number) => `$${Number(value).toFixed(2)}`} />
-                    <Legend />
-                  </PieChart>
-                </ResponsiveContainer>
-              )}
-            </CardContent>
-          </Card>
-        </div>
-
-        <div className="grid gap-4 lg:grid-cols-2">
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Top Products</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="rounded-md border">
+      <div className="grid gap-4 lg:grid-cols-2">
+        <Card className="overflow-hidden border-primary/10">
+          <CardHeader className="border-b border-primary/10 bg-gradient-to-r from-primary/[0.05] to-transparent">
+            <CardTitle className="text-base">Top products</CardTitle>
+          </CardHeader>
+          <CardContent className="pt-4">
+            {productsLoading ? (
+              <p className="text-sm text-muted-foreground">Loading…</p>
+            ) : (
+              <div className="overflow-x-auto rounded-lg border">
                 <Table>
                   <TableHeader>
-                    <TableRow>
-                      <TableHead>#</TableHead>
+                    <TableRow className="bg-muted/40 hover:bg-muted/40">
+                      <TableHead className="w-12">#</TableHead>
                       <TableHead>Product</TableHead>
                       <TableHead className="text-right">Qty</TableHead>
                       <TableHead className="text-right">Revenue</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {productsLoading ? (
-                      <TableRow>
-                        <TableCell colSpan={4}>Loading...</TableCell>
+                    {topProducts.map((p, i) => (
+                      <TableRow key={`${p.product_name}-${i}`}>
+                        <TableCell>
+                          <span
+                            className={
+                              i < 3
+                                ? "inline-flex h-6 w-6 items-center justify-center rounded-md bg-primary/15 text-xs font-bold text-primary"
+                                : "text-muted-foreground"
+                            }
+                          >
+                            {i + 1}
+                          </span>
+                        </TableCell>
+                        <TableCell className="font-medium">{p.product_name}</TableCell>
+                        <TableCell className="text-right tabular-nums">{p.total_quantity}</TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          ${Number(p.total_revenue).toFixed(2)}
+                        </TableCell>
                       </TableRow>
-                    ) : topProducts.length === 0 ? (
-                      <TableRow>
-                        <TableCell colSpan={4}>No products sold</TableCell>
-                      </TableRow>
-                    ) : (
-                      topProducts.map((p, i) => (
-                        <TableRow key={`${p.product_name}-${i}`}>
-                          <TableCell>{i + 1}</TableCell>
-                          <TableCell className="font-medium">{p.product_name}</TableCell>
-                          <TableCell className="text-right">{p.total_quantity}</TableCell>
-                          <TableCell className="text-right">
-                            ${Number(p.total_revenue).toFixed(2)}
-                          </TableCell>
-                        </TableRow>
-                      ))
-                    )}
+                    ))}
                   </TableBody>
                 </Table>
               </div>
-            </CardContent>
-          </Card>
+            )}
+          </CardContent>
+        </Card>
 
-          <Card>
-            <CardHeader>
-              <CardTitle className="text-base">Top Shops</CardTitle>
-            </CardHeader>
-            <CardContent>
-              <div className="rounded-md border">
+        <Card className="overflow-hidden border-primary/10">
+          <CardHeader className="border-b border-primary/10 bg-gradient-to-r from-primary/[0.05] to-transparent">
+            <CardTitle className="text-base">Top shops</CardTitle>
+          </CardHeader>
+          <CardContent className="pt-4">
+            {shopsLoading ? (
+              <p className="text-sm text-muted-foreground">Loading…</p>
+            ) : (
+              <div className="overflow-x-auto rounded-lg border">
                 <Table>
                   <TableHeader>
-                    <TableRow>
-                      <TableHead>#</TableHead>
+                    <TableRow className="bg-muted/40 hover:bg-muted/40">
+                      <TableHead className="w-12">#</TableHead>
                       <TableHead>Shop</TableHead>
                       <TableHead className="text-right">Invoices</TableHead>
                       <TableHead className="text-right">Revenue</TableHead>
                     </TableRow>
                   </TableHeader>
                   <TableBody>
-                    {shopsLoading ? (
-                      <TableRow>
-                        <TableCell colSpan={4}>Loading...</TableCell>
+                    {topShops.map((s, i) => (
+                      <TableRow key={`${s.shop_name}-${i}`}>
+                        <TableCell>
+                          <span
+                            className={
+                              i < 3
+                                ? "inline-flex h-6 w-6 items-center justify-center rounded-md bg-primary/15 text-xs font-bold text-primary"
+                                : "text-muted-foreground"
+                            }
+                          >
+                            {i + 1}
+                          </span>
+                        </TableCell>
+                        <TableCell className="font-medium">{s.shop_name}</TableCell>
+                        <TableCell className="text-right tabular-nums">{s.invoice_count}</TableCell>
+                        <TableCell className="text-right tabular-nums">
+                          ${Number(s.total_revenue).toFixed(2)}
+                        </TableCell>
                       </TableRow>
-                    ) : topShops.length === 0 ? (
-                      <TableRow>
-                        <TableCell colSpan={4}>No shop sales</TableCell>
-                      </TableRow>
-                    ) : (
-                      topShops.map((s, i) => (
-                        <TableRow key={`${s.shop_name}-${i}`}>
-                          <TableCell>{i + 1}</TableCell>
-                          <TableCell className="font-medium">{s.shop_name}</TableCell>
-                          <TableCell className="text-right">{s.invoice_count}</TableCell>
-                          <TableCell className="text-right">
-                            ${Number(s.total_revenue).toFixed(2)}
-                          </TableCell>
-                        </TableRow>
-                      ))
-                    )}
+                    ))}
                   </TableBody>
                 </Table>
               </div>
-            </CardContent>
-          </Card>
-        </div>
+            )}
+          </CardContent>
+        </Card>
       </div>
-    </>
+    </div>
   );
 };
 

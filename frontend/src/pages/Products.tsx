@@ -41,13 +41,26 @@ import { useAuth } from "@/lib/auth";
 import { api, ApiError } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 import { BulkProductUploadDialog } from "@/components/products/BulkProductUploadDialog";
+import { PageHero } from "@/components/ui/PageHero";
+import { EmptyState } from "@/components/ui/EmptyState";
 import { cn } from "@/lib/utils";
-import { ArrowDownAZ, ArrowUpAZ, Check, ChevronsUpDown, Edit, Plus, Power } from "lucide-react";
+import {
+  ArrowDownAZ,
+  ArrowUpAZ,
+  Check,
+  ChevronsUpDown,
+  Edit,
+  Package,
+  Plus,
+  Power,
+  Search,
+} from "lucide-react";
 
 type Product = {
   id: string;
   name: string;
   sku: string | null;
+  barcode: string | null;
   category: string;
   subcategory: string | null;
   sub_subcategory: string | null;
@@ -62,6 +75,7 @@ type Product = {
 type ProductFormState = {
   name: string;
   sku: string;
+  barcode: string;
   category: string;
   subcategory: string;
   sub_subcategory: string;
@@ -74,6 +88,7 @@ type ProductFormState = {
 const emptyForm: ProductFormState = {
   name: "",
   sku: "",
+  barcode: "",
   category: "General",
   subcategory: "",
   sub_subcategory: "",
@@ -87,6 +102,7 @@ function toForm(product: Product): ProductFormState {
   return {
     name: product.name,
     sku: product.sku || "",
+    barcode: product.barcode || "",
     category: product.category || "General",
     subcategory: product.subcategory || "",
     sub_subcategory: product.sub_subcategory || "",
@@ -101,6 +117,7 @@ function formPayload(form: ProductFormState) {
   return {
     name: form.name.trim(),
     sku: form.sku.trim() || null,
+    barcode: form.barcode.trim() || null,
     category: form.category.trim() || "General",
     subcategory: form.subcategory.trim() || null,
     sub_subcategory: form.sub_subcategory.trim() || null,
@@ -167,6 +184,7 @@ const Products = () => {
       return (
         p.name.toLowerCase().includes(q) ||
         (p.sku || "").toLowerCase().includes(q) ||
+        (p.barcode || "").toLowerCase().includes(q) ||
         p.category.toLowerCase().includes(q) ||
         (p.subcategory || "").toLowerCase().includes(q) ||
         (p.sub_subcategory || "").toLowerCase().includes(q)
@@ -266,29 +284,41 @@ const Products = () => {
     setSubcategoryOpen(false);
   };
 
+  const activeCount = products.filter((p) => p.is_active).length;
+  const lowStockCount = products.filter((p) => {
+    const total = Number(p.stock_quantity || 0) + Number(p.stock_quantity_b || 0);
+    return p.is_active && total <= Number(p.low_stock_threshold || 0);
+  }).length;
+
   return (
     <>
       <div className="space-y-4">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h1 className="text-2xl font-bold">Products</h1>
-            <p className="text-muted-foreground">Manage catalog and warehouse stock</p>
-          </div>
-          {canManage && (
-            <div className="flex flex-col sm:flex-row flex-wrap gap-2 w-full sm:w-auto">
-              <BulkProductUploadDialog
-                categoryFilter={categoryFilter}
-                subcategoryFilter={subcategoryFilter}
-              />
-              <Button className="w-full sm:w-auto h-11" onClick={openCreate}>
-                <Plus className="h-4 w-4 mr-2" />
-                Add Product
-              </Button>
-            </div>
-          )}
-        </div>
+        <PageHero
+          icon={Package}
+          title="Products"
+          description="Catalog, SKUs, and warehouse stock for A & B"
+          stats={[
+            { label: "Total", value: products.length, accent: true },
+            { label: "Active", value: activeCount },
+            { label: "Low stock", value: lowStockCount },
+          ]}
+          action={
+            canManage ? (
+              <div className="flex w-full flex-col flex-wrap gap-2 sm:w-auto sm:flex-row">
+                <BulkProductUploadDialog
+                  categoryFilter={categoryFilter}
+                  subcategoryFilter={subcategoryFilter}
+                />
+                <Button className="h-11 w-full shadow-sm shadow-primary/25 sm:w-auto" onClick={openCreate}>
+                  <Plus className="mr-2 h-4 w-4" />
+                  Add Product
+                </Button>
+              </div>
+            ) : undefined
+          }
+        />
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-[1fr_minmax(12rem,16rem)_minmax(12rem,16rem)_auto] gap-3 items-end">
+        <div className="grid grid-cols-1 items-end gap-3 rounded-xl border border-primary/10 bg-card p-3 sm:grid-cols-2 sm:p-4 lg:grid-cols-[1fr_minmax(12rem,16rem)_minmax(12rem,16rem)_auto]">
           <div className="space-y-2">
             <Label htmlFor="product-search">Search</Label>
             <Input
@@ -437,9 +467,11 @@ const Products = () => {
         </p>
 
         {!canShowProductList ? (
-          <div className="rounded-md border border-dashed p-8 text-center text-sm text-muted-foreground">
-            Choose a category or search by SKU/flavor to browse the catalog faster
-          </div>
+          <EmptyState
+            icon={Search}
+            title="Narrow the catalog"
+            description="Choose a category or type at least 2 characters to browse products faster"
+          />
         ) : (
         <>
         {/* Mobile cards */}
@@ -455,11 +487,24 @@ const Products = () => {
               return (
                 <div
                   key={product.id}
-                  className={`rounded-lg border bg-card p-4 space-y-3 ${!product.is_active ? "opacity-60" : ""}`}
+                  className={cn(
+                    "relative space-y-3 overflow-hidden rounded-xl border bg-card p-4 pl-5 transition-all",
+                    "hover:border-primary/30 hover:shadow-sm hover:shadow-primary/10",
+                    !product.is_active && "opacity-60"
+                  )}
                 >
+                  <div
+                    className={cn(
+                      "absolute inset-y-0 left-0 w-1",
+                      product.is_active ? "bg-primary" : "bg-muted-foreground/30"
+                    )}
+                  />
                   <div className="flex items-start justify-between gap-2">
                     <div className="min-w-0">
                       <p className="font-mono text-sm font-semibold">{product.sku || "—"}</p>
+                      {product.barcode && (
+                        <p className="font-mono text-xs text-muted-foreground">{product.barcode}</p>
+                      )}
                       <p className="font-medium leading-snug">{product.name}</p>
                       <p className="text-sm text-muted-foreground">
                         {product.category}
@@ -662,8 +707,20 @@ const Products = () => {
               <Input
                 value={form.sku}
                 onChange={(e) => setForm({ ...form, sku: e.target.value })}
-                placeholder="e.g. AU01-US"
+                placeholder="Short code e.g. AU01-US"
               />
+            </div>
+            <div className="space-y-2">
+              <Label>Barcode</Label>
+              <Input
+                value={form.barcode}
+                onChange={(e) => setForm({ ...form, barcode: e.target.value })}
+                placeholder="Exact code from the product barcode"
+                className="font-mono"
+              />
+              <p className="text-xs text-muted-foreground">
+                Used by camera and Bluetooth scanners — leave SKU as the short name
+              </p>
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-2">
