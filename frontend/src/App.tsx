@@ -22,6 +22,7 @@ import NotFound from "./pages/NotFound";
 const ProductAnalytics = lazy(() => import("./pages/ProductAnalytics"));
 const Users = lazy(() => import("./pages/Users"));
 const SalesPerformance = lazy(() => import("./pages/SalesPerformance"));
+const SupportTickets = lazy(() => import("./pages/SupportTickets"));
 
 const queryClient = new QueryClient({
   defaultOptions: {
@@ -83,6 +84,14 @@ const App = () => (
                 element={
                   <Suspense fallback={<AdminPageFallback />}>
                     <SalesPerformance />
+                  </Suspense>
+                }
+              />
+              <Route
+                path="/support"
+                element={
+                  <Suspense fallback={<AdminPageFallback />}>
+                    <SupportTickets />
                   </Suspense>
                 }
               />
