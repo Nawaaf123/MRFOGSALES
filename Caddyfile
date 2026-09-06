@@ -1,0 +1,11 @@
+# Automatic HTTPS via Let's Encrypt (ports 80 + 443 must be open).
+mrfogorder.com, www.mrfogorder.com {
+	encode gzip
+	reverse_proxy web:80
+}
+
+# Keep raw Elastic IP reachable over HTTP (no cert for IP).
+http://3.231.131.90 {
+	encode gzip
+	reverse_proxy web:80
+}

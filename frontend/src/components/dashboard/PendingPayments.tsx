@@ -35,23 +35,28 @@ export const PendingPayments = () => {
     }, 0) || 0;
 
   return (
-    <Card>
-      <CardHeader>
-        <div className="flex items-center justify-between">
-          <CardTitle className="flex items-center gap-2">
-            <AlertCircle className="h-5 w-5 text-orange-500" />
-            {isAdmin ? "Pending Payments" : "My Pending Payments"}
+    <Card className="overflow-hidden border-primary/10">
+      <CardHeader className="border-b border-primary/10 bg-gradient-to-r from-primary/[0.07] to-transparent">
+        <div className="flex items-center justify-between gap-2">
+          <CardTitle className="flex items-center gap-2 text-base">
+            <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
+              <AlertCircle className="h-4 w-4" />
+            </span>
+            {isAdmin ? "Pending payments" : "My pending payments"}
           </CardTitle>
-          <Badge variant="outline" className="text-sm">
+          <Badge className="bg-primary/15 text-primary hover:bg-primary/15">
             ${totalPending.toFixed(2)}
           </Badge>
         </div>
       </CardHeader>
-      <CardContent>
+      <CardContent className="pt-4">
         {isLoading ? (
-          <p className="text-sm text-muted-foreground">Loading...</p>
+          <div className="space-y-2">
+            <div className="h-14 animate-pulse rounded-lg bg-muted" />
+            <div className="h-14 animate-pulse rounded-lg bg-muted" />
+          </div>
         ) : pendingInvoices && pendingInvoices.length > 0 ? (
-          <div className="space-y-3">
+          <div className="space-y-2">
             {pendingInvoices.map((invoice) => {
               const remaining = Math.max(
                 0,
@@ -60,11 +65,12 @@ export const PendingPayments = () => {
               return (
                 <div
                   key={invoice.id}
-                  className="flex items-center justify-between p-3 border rounded-lg hover:bg-muted/50 transition-colors"
+                  className="relative flex items-center justify-between overflow-hidden rounded-lg border border-border p-3 pl-4 transition-colors hover:border-primary/30 hover:bg-primary/[0.03]"
                 >
-                  <div className="flex-1">
-                    <div className="flex items-center gap-2 mb-1">
-                      <p className="font-medium text-sm">{invoice.invoice_number}</p>
+                  <div className="absolute inset-y-0 left-0 w-1 bg-primary" />
+                  <div className="min-w-0 flex-1">
+                    <div className="mb-1 flex flex-wrap items-center gap-2">
+                      <p className="text-sm font-medium">{invoice.invoice_number}</p>
                       <Badge
                         variant={getStatusColor(invoice.payment_status)}
                         className="text-xs capitalize"
@@ -72,12 +78,12 @@ export const PendingPayments = () => {
                         {invoice.payment_status}
                       </Badge>
                     </div>
-                    <p className="text-xs text-muted-foreground">
+                    <p className="truncate text-xs text-muted-foreground">
                       {invoice.shop?.name || "Unknown Shop"}
                     </p>
                   </div>
                   <div className="text-right">
-                    <p className="font-semibold text-sm text-orange-600">
+                    <p className="text-sm font-semibold tabular-nums text-primary">
                       ${remaining.toFixed(2)}
                     </p>
                   </div>
@@ -86,9 +92,9 @@ export const PendingPayments = () => {
             })}
           </div>
         ) : (
-          <div className="text-center py-6 text-muted-foreground">
-            <p className="text-sm">No pending payments</p>
-            <p className="text-xs mt-1">All invoices are paid!</p>
+          <div className="py-6 text-center text-muted-foreground">
+            <p className="text-sm font-medium text-foreground">No pending payments</p>
+            <p className="mt-1 text-xs">All invoices are paid</p>
           </div>
         )}
       </CardContent>

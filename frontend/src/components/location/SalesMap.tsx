@@ -3,25 +3,17 @@ import mapboxgl from "mapbox-gl";
 import type { GeoJSONSource } from "mapbox-gl";
 import "mapbox-gl/dist/mapbox-gl.css";
 import { api } from "@/lib/api";
+import { fetchAllPages } from "@/lib/pagination";
 import { Card } from "@/components/ui/card";
 import { Loader2 } from "lucide-react";
 
 const MAPBOX_TOKEN = import.meta.env.VITE_MAPBOX_TOKEN || "";
 const POLL_MS = 30_000;
 const SHOPS_SOURCE = "shops-src";
-const SALES_SOURCE = "sales-src";
-const PIN_IMAGE = "shop-pin-red";
-
-type SalesLocation = {
-  id: string;
-  user_id: string;
-  latitude: number;
-  longitude: number;
-  accuracy: number | null;
-  updated_at: string;
-  full_name: string | null;
-  email: string | null;
-};
+const GLOW_LAYER = "shops-glow";
+const DOTS_LAYER = "shops-dots";
+const PINS_LAYER = "shops-pins";
+const PIN_IMAGE = "shop-pin-red-glow";
 
 type ShopPin = {
   id: string;
@@ -57,157 +49,178 @@ function formatShopAddress(props: Record<string, unknown>) {
   return [line1, line2].filter(Boolean).join("<br/>") || "No address";
 }
 
-function shopsToGeoJSON(shops: ShopPin[]): FC {
-  return {
-    type: "FeatureCollection",
-    features: shops
-      .filter((s) => s.latitude != null && s.longitude != null)
-      .map((shop) => ({
-        type: "Feature" as const,
-        properties: {
-          id: shop.id,
-          kind: "shop",
-          name: shop.name,
-          street_address: shop.street_address || "",
-          city: shop.city || "",
-          state: shop.state || "",
-          zip_code: shop.zip_code || "",
-        },
-        geometry: {
-          type: "Point" as const,
-          coordinates: [shop.longitude as number, shop.latitude as number],
-        },
-      })),
-  };
+function toCoord(value: unknown): number | null {
+  if (value == null || value === "") return null;
+  const n = typeof value === "number" ? value : Number(value);
+  return Number.isFinite(n) ? n : null;
 }
 
-function salesToGeoJSON(locations: SalesLocation[]): FC {
-  return {
-    type: "FeatureCollection",
-    features: locations.map((loc) => ({
-      type: "Feature" as const,
+function shopsToGeoJSON(shops: ShopPin[]): FC {
+  const features: FC["features"] = [];
+  for (const shop of shops) {
+    const lat = toCoord(shop.latitude);
+    const lng = toCoord(shop.longitude);
+    if (lat == null || lng == null) continue;
+    features.push({
+      type: "Feature",
       properties: {
-        id: loc.user_id,
-        kind: "sales",
-        name: loc.full_name || "Unknown",
-        email: loc.email || "",
-        updated_at: loc.updated_at,
+        id: String(shop.id),
+        kind: "shop",
+        name: shop.name || "",
+        street_address: shop.street_address || "",
+        city: shop.city || "",
+        state: shop.state || "",
+        zip_code: shop.zip_code || "",
       },
       geometry: {
-        type: "Point" as const,
-        coordinates: [loc.longitude, loc.latitude],
+        type: "Point",
+        coordinates: [lng, lat],
       },
-    })),
-  };
+    });
+  }
+  return { type: "FeatureCollection", features };
 }
 
-/** Classic glossy teardrop pin (red) with circular hole — like a location marker. */
-function createPinImageData(): ImageData {
-  const width = 96;
-  const height = 128;
+/** Draw a glowing red teardrop pin into ImageData (no SVG/CORS issues). */
+function createPinImageData(): {
+  width: number;
+  height: number;
+  data: Uint8Array;
+} {
+  const width = 64;
+  const height = 96;
   const canvas = document.createElement("canvas");
   canvas.width = width;
   canvas.height = height;
-  const ctx = canvas.getContext("2d");
-  if (!ctx) return new ImageData(width, height);
+  const ctx = canvas.getContext("2d", { willReadFrequently: true });
+  if (!ctx) {
+    return { width, height, data: new Uint8Array(width * height * 4) };
+  }
 
   const cx = width / 2;
-  const headY = 46;
-  const tipY = height - 4;
-  const r = 34;
+  const headY = 34;
+  const tipY = height - 6;
+  const r = 22;
 
-  // Soft ground shadow under tip
+  // Outer glow
   ctx.beginPath();
-  ctx.ellipse(cx, tipY, 14, 5, 0, 0, Math.PI * 2);
-  ctx.fillStyle = "rgba(0,0,0,0.2)";
+  ctx.arc(cx, headY, r + 8, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(255, 23, 68, 0.28)";
+  ctx.fill();
+  ctx.beginPath();
+  ctx.arc(cx, headY, r + 4, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(255, 82, 82, 0.4)";
   ctx.fill();
 
-  // Classic map-pin silhouette (round head → sharp tip)
+  // Soft ground shadow
+  ctx.beginPath();
+  ctx.ellipse(cx, tipY + 1, 10, 3.5, 0, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(0,0,0,0.25)";
+  ctx.fill();
+
+  // Pin body
   ctx.beginPath();
   ctx.moveTo(cx, tipY);
-  ctx.bezierCurveTo(cx + 36, headY + 28, cx + r + 2, headY - 8, cx + r, headY);
+  ctx.bezierCurveTo(cx + 24, headY + 20, cx + r + 1, headY - 4, cx + r, headY);
   ctx.arc(cx, headY, r, 0, Math.PI, true);
-  ctx.bezierCurveTo(cx - r - 2, headY - 8, cx - 36, headY + 28, cx, tipY);
+  ctx.bezierCurveTo(cx - r - 1, headY - 4, cx - 24, headY + 20, cx, tipY);
   ctx.closePath();
 
-  const body = ctx.createLinearGradient(cx - r, headY - r, cx + r * 0.6, tipY);
-  body.addColorStop(0, "#ff7a7a");
-  body.addColorStop(0.28, "#f44336");
-  body.addColorStop(0.65, "#d32f2f");
+  const body = ctx.createLinearGradient(cx - r, headY - r, cx + r * 0.5, tipY);
+  body.addColorStop(0, "#ff8a80");
+  body.addColorStop(0.4, "#e53935");
   body.addColorStop(1, "#b71c1c");
   ctx.fillStyle = body;
   ctx.fill();
-
-  // Soft edge highlight
-  ctx.lineWidth = 2.5;
-  ctx.strokeStyle = "rgba(255,255,255,0.28)";
+  ctx.lineWidth = 2;
+  ctx.strokeStyle = "rgba(255,255,255,0.85)";
   ctx.stroke();
 
-  // Punch circular hole through the head
-  const holeR = 12;
-  ctx.globalCompositeOperation = "destination-out";
+  // Center hole
   ctx.beginPath();
-  ctx.arc(cx, headY - 1, holeR, 0, Math.PI * 2);
+  ctx.arc(cx, headY - 1, 7, 0, Math.PI * 2);
+  ctx.fillStyle = "#ffffff";
   ctx.fill();
-  ctx.globalCompositeOperation = "source-over";
-
-  // Hole rim (inner edge catch-light)
   ctx.beginPath();
-  ctx.arc(cx, headY - 1, holeR, 0, Math.PI * 2);
-  ctx.lineWidth = 2.5;
-  ctx.strokeStyle = "rgba(255,255,255,0.5)";
-  ctx.stroke();
-  ctx.beginPath();
-  ctx.arc(cx, headY - 1, holeR, 0.2, Math.PI * 0.9);
-  ctx.strokeStyle = "rgba(0,0,0,0.18)";
-  ctx.lineWidth = 1.5;
-  ctx.stroke();
-
-  // Specular gloss on upper-left of head
-  ctx.beginPath();
-  ctx.ellipse(cx - 12, headY - 16, 9, 5, -0.55, 0, Math.PI * 2);
-  ctx.fillStyle = "rgba(255,255,255,0.42)";
+  ctx.arc(cx, headY - 1, 4, 0, Math.PI * 2);
+  ctx.fillStyle = "#e53935";
   ctx.fill();
 
-  return ctx.getImageData(0, 0, width, height);
+  // Specular
+  ctx.beginPath();
+  ctx.ellipse(cx - 7, headY - 10, 5, 3, -0.5, 0, Math.PI * 2);
+  ctx.fillStyle = "rgba(255,255,255,0.45)";
+  ctx.fill();
+
+  const image = ctx.getImageData(0, 0, width, height);
+  return {
+    width,
+    height,
+    data: new Uint8Array(image.data),
+  };
 }
 
-function ensurePinImage(map: mapboxgl.Map) {
-  if (!map.hasImage(PIN_IMAGE)) {
+function ensurePinImage(map: mapboxgl.Map): boolean {
+  try {
+    if (map.hasImage(PIN_IMAGE)) return true;
     map.addImage(PIN_IMAGE, createPinImageData(), { pixelRatio: 2 });
+    return map.hasImage(PIN_IMAGE);
+  } catch (err) {
+    console.error("Pin image failed", err);
+    return false;
   }
 }
 
-function ensureLayers(map: mapboxgl.Map) {
-  ensurePinImage(map);
+function ensureShopLayers(map: mapboxgl.Map): boolean {
+  if (!map.isStyleLoaded()) return false;
+
+  const hasPin = ensurePinImage(map);
 
   if (!map.getSource(SHOPS_SOURCE)) {
     map.addSource(SHOPS_SOURCE, {
       type: "geojson",
       data: { type: "FeatureCollection", features: [] },
-      // No clustering — keeps every pin visible while still using fast GL layers
     });
+  }
 
-    // Tiny anchor under pin tip (helps hit-testing); pin icon is the main marker
+  if (!map.getLayer(GLOW_LAYER)) {
     map.addLayer({
-      id: "shops-circles",
+      id: GLOW_LAYER,
       type: "circle",
       source: SHOPS_SOURCE,
       paint: {
-        "circle-radius": 3,
-        "circle-color": "#e53935",
-        "circle-stroke-width": 0,
-        "circle-opacity": 0.01,
+        "circle-radius": 16,
+        "circle-color": "#ff1744",
+        "circle-opacity": 0.4,
+        "circle-blur": 0.9,
       },
     });
+  }
 
+  // Always-visible red dots so shops show even if the pin icon fails
+  if (!map.getLayer(DOTS_LAYER)) {
     map.addLayer({
-      id: "shops-pins",
+      id: DOTS_LAYER,
+      type: "circle",
+      source: SHOPS_SOURCE,
+      paint: {
+        "circle-radius": 6,
+        "circle-color": "#e53935",
+        "circle-stroke-width": 2,
+        "circle-stroke-color": "#ffffff",
+        "circle-opacity": 1,
+      },
+    });
+  }
+
+  if (hasPin && !map.getLayer(PINS_LAYER)) {
+    map.addLayer({
+      id: PINS_LAYER,
       type: "symbol",
       source: SHOPS_SOURCE,
       layout: {
         "icon-image": PIN_IMAGE,
-        "icon-size": 0.55,
+        "icon-size": 0.9,
         "icon-anchor": "bottom",
         "icon-allow-overlap": true,
         "icon-ignore-placement": true,
@@ -215,24 +228,7 @@ function ensureLayers(map: mapboxgl.Map) {
     });
   }
 
-  if (!map.getSource(SALES_SOURCE)) {
-    map.addSource(SALES_SOURCE, {
-      type: "geojson",
-      data: { type: "FeatureCollection", features: [] },
-    });
-
-    map.addLayer({
-      id: "sales-dots",
-      type: "circle",
-      source: SALES_SOURCE,
-      paint: {
-        "circle-radius": 8,
-        "circle-color": "#2563eb",
-        "circle-stroke-width": 2,
-        "circle-stroke-color": "#ffffff",
-      },
-    });
-  }
+  return true;
 }
 
 type LocationsMapProps = {
@@ -250,62 +246,85 @@ export const LocationsMap = ({
   const map = useRef<mapboxgl.Map | null>(null);
   const popup = useRef<mapboxgl.Popup | null>(null);
   const didFit = useRef(false);
+  const pendingGeo = useRef<FC | null>(null);
+  const styleFlushTimer = useRef<number | undefined>(undefined);
   const [loading, setLoading] = useState(true);
   const [mapError, setMapError] = useState<string | null>(null);
-  const [counts, setCounts] = useState({ shops: 0, sales: 0 });
+  const [shopCount, setShopCount] = useState(0);
+  const [loadHint, setLoadHint] = useState<string | null>(null);
 
-  const fetchAndDisplay = useCallback(async () => {
+  const applyShopData = useCallback((geo: FC) => {
     const m = map.current;
     if (!m) return;
 
     try {
-      // Do not gate on isStyleLoaded() — in Mapbox GL v3 it can stay false and skip all data.
-      ensureLayers(m);
-
-      let shops: ShopPin[] = [];
-      try {
-        shops = await api<ShopPin[]>("/shops/map");
-      } catch {
-        shops = await api<ShopPin[]>("/shops?with_coords_only=true");
+      if (!ensureShopLayers(m)) {
+        pendingGeo.current = geo;
+        return;
       }
 
-      let locations: SalesLocation[] = [];
-      try {
-        locations = await api<SalesLocation[]>("/locations");
-      } catch {
-        // Sales GPS list is admin-only; shops must still render for other roles.
-        locations = [];
+      const source = m.getSource(SHOPS_SOURCE) as GeoJSONSource | undefined;
+      if (!source) {
+        pendingGeo.current = geo;
+        return;
       }
 
-      const shopsGeo = shopsToGeoJSON(shops);
-      const salesGeo = salesToGeoJSON(locations);
+      source.setData(geo as GeoJSON.FeatureCollection);
+      setShopCount(geo.features.length);
+      setLoadHint(geo.features.length === 0 ? "No shops with map coordinates" : null);
 
-      const shopsSource = m.getSource(SHOPS_SOURCE) as GeoJSONSource | undefined;
-      const salesSource = m.getSource(SALES_SOURCE) as GeoJSONSource | undefined;
-      if (!shopsSource || !salesSource) {
-        ensureLayers(m);
-      }
-      (m.getSource(SHOPS_SOURCE) as GeoJSONSource | undefined)?.setData(
-        shopsGeo as GeoJSON.FeatureCollection
-      );
-      (m.getSource(SALES_SOURCE) as GeoJSONSource | undefined)?.setData(
-        salesGeo as GeoJSON.FeatureCollection
-      );
-
-      setCounts({ shops: shopsGeo.features.length, sales: salesGeo.features.length });
-
-      if (!didFit.current && shopsGeo.features.length > 0) {
+      if (!didFit.current && geo.features.length > 0) {
         const bounds = new mapboxgl.LngLatBounds();
-        for (const f of shopsGeo.features) bounds.extend(f.geometry.coordinates);
-        for (const f of salesGeo.features) bounds.extend(f.geometry.coordinates);
+        for (const f of geo.features) bounds.extend(f.geometry.coordinates);
         m.fitBounds(bounds, { padding: 60, maxZoom: 9, duration: 0 });
         didFit.current = true;
       }
-    } catch (error) {
-      console.error("Error fetching map locations:", error);
-      setCounts({ shops: 0, sales: 0 });
+    } catch (err) {
+      console.error("Failed to apply shop markers", err);
+      // Keep any count we already know; don't pretend the API failed
+      setLoadHint("Map markers failed to draw — try refreshing");
     }
   }, []);
+
+  const fetchAndDisplay = useCallback(async () => {
+    if (!map.current) return;
+
+    const sleep = (ms: number) => new Promise((r) => window.setTimeout(r, ms));
+
+    const loadShops = async (): Promise<ShopPin[]> => {
+      try {
+        return await api<ShopPin[]>("/shops/map", { timeoutMs: 45_000 });
+      } catch {
+        return await fetchAllPages<ShopPin>("/shops", {
+          extraParams: { with_coords_only: true },
+          timeoutMs: 45_000,
+        });
+      }
+    };
+
+    let lastError: unknown = null;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      try {
+        const shops = await loadShops();
+        applyShopData(shopsToGeoJSON(shops));
+        return;
+      } catch (error) {
+        lastError = error;
+        console.error(`Shop map fetch attempt ${attempt + 1} failed`, error);
+        if (attempt < 2) await sleep(800 * (attempt + 1));
+      }
+    }
+
+    const msg =
+      typeof lastError === "object" &&
+      lastError &&
+      "message" in lastError &&
+      typeof (lastError as { message: unknown }).message === "string"
+        ? (lastError as { message: string }).message
+        : "Could not load shop locations";
+    setShopCount(0);
+    setLoadHint(msg);
+  }, [applyShopData]);
 
   useEffect(() => {
     if (!MAPBOX_TOKEN) {
@@ -335,23 +354,34 @@ export const LocationsMap = ({
       popup.current = new mapboxgl.Popup({
         closeButton: true,
         closeOnClick: true,
-        offset: 18,
+        offset: 22,
         maxWidth: "260px",
       });
 
       m.addControl(new mapboxgl.NavigationControl({ showCompass: false }), "top-right");
 
+      m.on("styleimagemissing", (e) => {
+        if (e.id === PIN_IMAGE) ensurePinImage(m);
+      });
+
+      const flushPending = () => {
+        ensureShopLayers(m);
+        if (pendingGeo.current) {
+          const geo = pendingGeo.current;
+          pendingGeo.current = null;
+          applyShopData(geo);
+        }
+      };
+
       const onReady = () => {
         try {
-          ensureLayers(m);
+          ensureShopLayers(m);
+          flushPending();
           setLoading(false);
-          // Defer one frame so the style/sources are fully attached before setData
-          window.requestAnimationFrame(() => {
-            void fetchAndDisplay();
-          });
+          void fetchAndDisplay();
         } catch (err) {
           console.error(err);
-          setMapError("Failed to set up map layers");
+          setMapError("Failed to set up map pins");
           setLoading(false);
         }
       };
@@ -359,13 +389,24 @@ export const LocationsMap = ({
       if (m.isStyleLoaded()) onReady();
       else m.once("load", onReady);
 
+      m.on("styledata", () => {
+        if (!m.isStyleLoaded()) return;
+        // Throttle — styledata fires very often and can starve fetch work
+        if (styleFlushTimer.current) window.clearTimeout(styleFlushTimer.current);
+        styleFlushTimer.current = window.setTimeout(() => {
+          flushPending();
+        }, 100);
+      });
+
       m.on("error", (e) => {
         console.error("Mapbox error", e);
-        const msg =
-          (e as { error?: { message?: string } })?.error?.message ||
-          "Map failed to load. Check the Mapbox token and URL restrictions.";
-        setMapError(msg);
-        setLoading(false);
+        if (!m.isStyleLoaded()) {
+          const msg =
+            (e as { error?: { message?: string } })?.error?.message ||
+            "Map failed to load. Check the Mapbox token and URL restrictions.";
+          setMapError(msg);
+          setLoading(false);
+        }
       });
 
       const showShopPopup = (
@@ -386,30 +427,10 @@ export const LocationsMap = ({
           .addTo(m);
       };
 
-      m.on("click", "shops-pins", showShopPopup);
-      m.on("click", "shops-circles", showShopPopup);
+      m.on("click", PINS_LAYER, showShopPopup);
+      m.on("click", DOTS_LAYER, showShopPopup);
 
-      m.on("click", "sales-dots", (e) => {
-        const f = e.features?.[0];
-        if (!f || f.geometry.type !== "Point") return;
-        const props = f.properties || {};
-        const updated = props.updated_at
-          ? new Date(String(props.updated_at)).toLocaleString()
-          : "";
-        popup.current
-          ?.setLngLat(f.geometry.coordinates as [number, number])
-          .setHTML(
-            `<div style="padding:8px;min-width:140px;">
-              <div style="font-size:11px;color:#2563eb;font-weight:600;margin-bottom:2px;">Sales</div>
-              <h3 style="font-weight:600;margin-bottom:4px;">${escapeHtml(String(props.name || "Unknown"))}</h3>
-              <p style="font-size:12px;color:#666;margin-bottom:4px;">${escapeHtml(String(props.email || ""))}</p>
-              <p style="font-size:11px;color:#999;">Last updated: ${escapeHtml(updated)}</p>
-            </div>`
-          )
-          .addTo(m);
-      });
-
-      for (const layer of ["shops-pins", "shops-circles", "sales-dots"]) {
+      for (const layer of [PINS_LAYER, DOTS_LAYER]) {
         m.on("mouseenter", layer, () => {
           m.getCanvas().style.cursor = "pointer";
         });
@@ -418,20 +439,25 @@ export const LocationsMap = ({
         });
       }
 
-      const interval = pollSales
-        ? window.setInterval(() => {
-            void fetchAndDisplay();
-          }, POLL_MS)
-        : undefined;
+      // Always retry periodically so a transient /api blip doesn't stick forever
+      const interval = window.setInterval(() => {
+        void fetchAndDisplay();
+      }, pollSales ? POLL_MS : 60_000);
 
       const onShopsChanged = () => {
         void fetchAndDisplay();
       };
       window.addEventListener("shops-changed", onShopsChanged);
 
+      const resize = () => m.resize();
+      window.requestAnimationFrame(resize);
+      window.addEventListener("resize", resize);
+
       return () => {
-        if (interval) window.clearInterval(interval);
+        window.clearInterval(interval);
+        if (styleFlushTimer.current) window.clearTimeout(styleFlushTimer.current);
         window.removeEventListener("shops-changed", onShopsChanged);
+        window.removeEventListener("resize", resize);
         popup.current?.remove();
         m.remove();
         map.current = null;
@@ -441,7 +467,7 @@ export const LocationsMap = ({
       setMapError("Failed to initialize map");
       setLoading(false);
     }
-  }, [fetchAndDisplay, pollSales]);
+  }, [applyShopData, fetchAndDisplay, pollSales]);
 
   return (
     <Card className={`relative w-full overflow-hidden ${heightClassName} ${className || ""}`}>
@@ -467,25 +493,40 @@ export const LocationsMap = ({
                 <span
                   className="absolute inset-x-0 top-0 mx-auto h-3 w-3 rounded-full bg-[#e53935]"
                   style={{
-                    boxShadow: "inset 0 0 0 4px #e53935, inset 0 0 0 6px transparent",
+                    boxShadow: "0 0 6px 2px rgba(229,57,53,0.75)",
                     background:
-                      "radial-gradient(circle at 50% 45%, transparent 32%, #e53935 34%)",
+                      "radial-gradient(circle at 50% 45%, #fff 28%, #e53935 32%)",
                   }}
                 />
                 <span
                   className="absolute left-1/2 bottom-0 h-2 w-2 -translate-x-1/2 bg-[#e53935]"
-                  style={{ clipPath: "polygon(50% 100%, 0 0, 100% 0)" }}
+                  style={{
+                    clipPath: "polygon(50% 100%, 0 0, 100% 0)",
+                    filter: "drop-shadow(0 0 3px rgba(229,57,53,0.8))",
+                  }}
                 />
               </span>
-              <span>Shops ({counts.shops})</span>
+              <span>Shops ({shopCount})</span>
             </div>
-            <div className="flex items-center gap-2">
-              <span className="inline-block h-3 w-3 rounded-full bg-[#2563eb] border border-white" />
-              <span>Sales team ({counts.sales})</span>
-            </div>
-            <p className="text-[10px] text-muted-foreground pt-0.5">
-              Red pins are shops · blue dots are sales GPS
-            </p>
+            {loadHint ? (
+              <div className="pt-0.5 space-y-1">
+                <p className="text-[10px] text-destructive">{loadHint}</p>
+                <button
+                  type="button"
+                  className="text-[10px] font-medium text-primary underline underline-offset-2"
+                  onClick={() => {
+                    setLoadHint("Retrying…");
+                    void fetchAndDisplay();
+                  }}
+                >
+                  Retry loading shops
+                </button>
+              </div>
+            ) : (
+              <p className="text-[10px] text-muted-foreground pt-0.5">
+                Glowing red pins are shops
+              </p>
+            )}
           </div>
         </>
       )}

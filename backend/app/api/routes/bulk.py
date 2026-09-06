@@ -32,18 +32,22 @@ def bulk_create_products(
     db: Session = Depends(get_db),
     _: User = Depends(require_roles(AppRole.admin, AppRole.sales)),
 ) -> BulkResult:
-    """Create products, or update existing rows when SKU already matches."""
+    """Create products, or update existing rows when barcode or SKU already matches."""
     created = 0
     updated = 0
     for item in payload.products:
         data = item.model_dump()
         sku = (data.get("sku") or "").strip() or None
+        barcode = (data.get("barcode") or "").strip() or None
         data["sku"] = sku
+        data["barcode"] = barcode
         if data.get("name"):
             data["name"] = str(data["name"]).strip()
 
         existing = None
-        if sku:
+        if barcode:
+            existing = db.query(Product).filter(Product.barcode == barcode).first()
+        if existing is None and sku:
             existing = db.query(Product).filter(Product.sku == sku).first()
 
         if existing:

@@ -9,6 +9,7 @@ import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { MobileBottomNav } from "@/components/MobileBottomNav";
 import { LocationTracker } from "@/components/location/LocationTracker";
 import { AiChatDrawer } from "@/components/ai/AiChatDrawer";
+import { InvoiceSyncRunner } from "@/lib/invoiceSyncRunner";
 
 export const DashboardLayout = ({ children }: { children?: React.ReactNode }) => {
   const { signOut, user } = useAuth();
@@ -46,6 +47,7 @@ export const DashboardLayout = ({ children }: { children?: React.ReactNode }) =>
 
   return (
     <div className="min-h-screen bg-background safe-area-inset">
+      <InvoiceSyncRunner />
       {isSalesLike && <LocationTracker />}
       <header className="border-b bg-card/95 backdrop-blur sticky top-0 z-50 supports-[backdrop-filter]:bg-card/90">
         <div className="container mx-auto flex h-14 md:h-16 items-center justify-between px-3 sm:px-4">
@@ -109,7 +111,7 @@ export const DashboardLayout = ({ children }: { children?: React.ReactNode }) =>
                   variant={isActiveRoute(item.path) ? "default" : "ghost"}
                   size="sm"
                   onClick={() => handleNavigation(item.path)}
-                  className="gap-2"
+                  className={cn("gap-2", isActiveRoute(item.path) && "shadow-sm shadow-primary/25")}
                 >
                   <item.icon className="h-4 w-4" />
                   <span>{item.label}</span>

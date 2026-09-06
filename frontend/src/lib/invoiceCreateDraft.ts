@@ -97,6 +97,9 @@ export function isNetworkApiError(error: { message?: string; status?: number } |
     msg.includes("failed to fetch") ||
     msg.includes("networkerror") ||
     msg.includes("network request failed") ||
-    msg.includes("load failed")
+    msg.includes("load failed") ||
+    msg.includes("timed out") ||
+    msg.includes("timeout") ||
+    msg.includes("abort")
   );
 }

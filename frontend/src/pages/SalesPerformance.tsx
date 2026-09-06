@@ -21,9 +21,15 @@ import {
   TableHeader,
   TableRow,
 } from "@/components/ui/table";
+import { PageHero } from "@/components/ui/PageHero";
+import { FilterChips } from "@/components/ui/FilterChips";
+import { StatsCard } from "@/components/dashboard/StatsCard";
+import { EmptyState } from "@/components/ui/EmptyState";
 import { useAuth } from "@/lib/auth";
 import { api } from "@/lib/api";
 import { Navigate } from "react-router-dom";
+import { cn } from "@/lib/utils";
+import { DollarSign, FileText, TrendingUp, Users } from "lucide-react";
 
 type Period = "today" | "week" | "month" | "custom";
 
@@ -115,84 +121,145 @@ const SalesPerformance = () => {
   );
 
   return (
-    <>
-      <div className="space-y-6">
-        <div>
-          <h1 className="text-2xl font-bold">Sales Performance</h1>
-          <p className="text-muted-foreground">
-            Salesperson revenue and commission for the selected period
-          </p>
-        </div>
+    <div className="space-y-6">
+      <PageHero
+        icon={TrendingUp}
+        title="Sales Performance"
+        description={
+          range
+            ? `${format(range.from, "MMM d, yyyy")} – ${format(range.to, "MMM d, yyyy")} · ${rate}% commission`
+            : "Pick a period to rank salesperson revenue and commission"
+        }
+        stats={[
+          { label: "Revenue", value: `$${totals.revenue.toFixed(0)}`, accent: true },
+          { label: "Invoices", value: totals.invoices },
+          { label: "Commission", value: `$${totals.commission.toFixed(0)}` },
+        ]}
+      />
 
-        <Card>
-          <CardContent className="pt-6 space-y-4">
-            <div className="flex flex-wrap gap-2">
-              {PERIODS.map((p) => (
-                <Button
-                  key={p.id}
-                  size="sm"
-                  variant={period === p.id ? "default" : "outline"}
-                  onClick={() => setPeriod(p.id)}
-                >
-                  {p.label}
-                </Button>
-              ))}
-            </div>
+      <FilterChips
+        value={period}
+        onChange={(id) => setPeriod(id as Period)}
+        items={PERIODS.map((p) => ({ id: p.id, label: p.label }))}
+      />
 
-            {period === "custom" && (
-              <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 max-w-md">
-                <div className="space-y-2">
-                  <Label>From</Label>
-                  <Input
-                    type="date"
-                    value={customFrom}
-                    onChange={(e) => setCustomFrom(e.target.value)}
-                  />
-                </div>
-                <div className="space-y-2">
-                  <Label>To</Label>
-                  <Input
-                    type="date"
-                    value={customTo}
-                    onChange={(e) => setCustomTo(e.target.value)}
-                  />
-                </div>
-              </div>
-            )}
-
-            <div className="max-w-xs space-y-2">
-              <Label>Commission rate (%)</Label>
+      <div className="rounded-xl border border-primary/10 bg-card p-4">
+        {period === "custom" && (
+          <div className="mb-4 grid max-w-md grid-cols-1 gap-3 sm:grid-cols-2">
+            <div className="space-y-2">
+              <Label>From</Label>
               <Input
-                type="number"
-                min="0"
-                max="100"
-                step="0.1"
-                value={commissionRate}
-                onChange={(e) => setCommissionRate(e.target.value)}
+                type="date"
+                className="h-11"
+                value={customFrom}
+                onChange={(e) => setCustomFrom(e.target.value)}
               />
             </div>
+            <div className="space-y-2">
+              <Label>To</Label>
+              <Input
+                type="date"
+                className="h-11"
+                value={customTo}
+                onChange={(e) => setCustomTo(e.target.value)}
+              />
+            </div>
+          </div>
+        )}
+        <div className="max-w-xs space-y-2">
+          <Label>Commission rate (%)</Label>
+          <Input
+            type="number"
+            min="0"
+            max="100"
+            step="0.1"
+            className="h-11"
+            value={commissionRate}
+            onChange={(e) => setCommissionRate(e.target.value)}
+          />
+        </div>
+      </div>
 
-            {range && (
-              <p className="text-sm text-muted-foreground">
-                {format(range.from, "MMM d, yyyy")} – {format(range.to, "MMM d, yyyy")} ·{" "}
-                {rate}% commission
-              </p>
-            )}
-          </CardContent>
-        </Card>
+      <div className="grid gap-4 sm:grid-cols-3">
+        <StatsCard title="Team revenue" value={`$${totals.revenue.toFixed(2)}`} icon={DollarSign} accent />
+        <StatsCard title="Invoices" value={totals.invoices} icon={FileText} />
+        <StatsCard title="Commission" value={`$${totals.commission.toFixed(2)}`} icon={TrendingUp} />
+      </div>
 
-        <Card>
-          <CardHeader>
-            <CardTitle className="text-base">Salespeople</CardTitle>
-          </CardHeader>
-          <CardContent>
-            {!qs ? (
-              <p className="text-sm text-muted-foreground">Select a valid custom date range</p>
+      {!qs ? (
+        <EmptyState
+          icon={Users}
+          title="Select a date range"
+          description="Choose custom From and To dates to load performance"
+        />
+      ) : (
+        <>
+          <div className="space-y-3 md:hidden">
+            {isLoading ? (
+              <div className="space-y-3">
+                {[0, 1, 2].map((i) => (
+                  <div key={i} className="h-24 animate-pulse rounded-xl bg-muted" />
+                ))}
+              </div>
+            ) : rows.length === 0 ? (
+              <EmptyState icon={Users} title="No salespeople found" />
             ) : (
-              <div className="rounded-md border">
+              rows.map((row, i) => (
+                <article
+                  key={row.user_id}
+                  className={cn(
+                    "relative overflow-hidden rounded-xl border bg-card p-4 pl-5",
+                    i < 3 ? "border-primary/25" : "border-border"
+                  )}
+                >
+                  <div className={cn("absolute inset-y-0 left-0 w-1", i < 3 ? "bg-primary" : "bg-muted")} />
+                  <div className="flex items-start justify-between gap-2">
+                    <div>
+                      <p className="font-semibold">
+                        {i < 3 && (
+                          <span className="mr-2 inline-flex h-6 w-6 items-center justify-center rounded-md bg-primary/15 text-xs font-bold text-primary">
+                            {i + 1}
+                          </span>
+                        )}
+                        {row.full_name}
+                      </p>
+                      <p className="text-xs text-muted-foreground">{row.email}</p>
+                    </div>
+                    <p className="text-lg font-bold tabular-nums text-primary">
+                      ${Number(row.total_revenue).toFixed(0)}
+                    </p>
+                  </div>
+                  <div className="mt-3 grid grid-cols-3 gap-2 text-center text-xs text-muted-foreground">
+                    <div className="rounded-lg bg-muted/60 py-2">
+                      <p className="font-semibold text-foreground">{row.invoice_count}</p>
+                      Invoices
+                    </div>
+                    <div className="rounded-lg bg-muted/60 py-2">
+                      <p className="font-semibold text-foreground">{row.unique_shops}</p>
+                      Shops
+                    </div>
+                    <div className="rounded-lg bg-muted/60 py-2">
+                      <p className="font-semibold text-foreground">
+                        ${Number(row.commission).toFixed(0)}
+                      </p>
+                      Comm.
+                    </div>
+                  </div>
+                </article>
+              ))
+            )}
+          </div>
+
+          <Card className="hidden overflow-hidden border-primary/10 md:block">
+            <CardHeader className="border-b border-primary/10 bg-gradient-to-r from-primary/[0.07] to-transparent">
+              <CardTitle className="text-base">Salespeople</CardTitle>
+            </CardHeader>
+            <CardContent className="pt-4">
+              <div className="overflow-x-auto rounded-lg border">
                 <Table>
                   <TableHeader>
-                    <TableRow>
+                    <TableRow className="bg-muted/40 hover:bg-muted/40">
+                      <TableHead className="w-12">#</TableHead>
                       <TableHead>Name</TableHead>
                       <TableHead>Email</TableHead>
                       <TableHead className="text-right">Invoices</TableHead>
@@ -205,40 +272,49 @@ const SalesPerformance = () => {
                   <TableBody>
                     {isLoading ? (
                       <TableRow>
-                        <TableCell colSpan={7}>Loading...</TableCell>
+                        <TableCell colSpan={8}>Loading…</TableCell>
                       </TableRow>
                     ) : rows.length === 0 ? (
                       <TableRow>
-                        <TableCell colSpan={7}>No salespeople found</TableCell>
+                        <TableCell colSpan={8}>No salespeople found</TableCell>
                       </TableRow>
                     ) : (
                       <>
-                        {rows.map((row) => (
+                        {rows.map((row, i) => (
                           <TableRow key={row.user_id}>
+                            <TableCell>
+                              <span
+                                className={
+                                  i < 3
+                                    ? "inline-flex h-6 w-6 items-center justify-center rounded-md bg-primary/15 text-xs font-bold text-primary"
+                                    : "text-muted-foreground"
+                                }
+                              >
+                                {i + 1}
+                              </span>
+                            </TableCell>
                             <TableCell className="font-medium">{row.full_name}</TableCell>
                             <TableCell>{row.email}</TableCell>
-                            <TableCell className="text-right">{row.invoice_count}</TableCell>
-                            <TableCell className="text-right">{row.unique_shops}</TableCell>
-                            <TableCell className="text-right">
+                            <TableCell className="text-right tabular-nums">{row.invoice_count}</TableCell>
+                            <TableCell className="text-right tabular-nums">{row.unique_shops}</TableCell>
+                            <TableCell className="text-right tabular-nums">
                               ${Number(row.total_revenue).toFixed(2)}
                             </TableCell>
-                            <TableCell className="text-right">
+                            <TableCell className="text-right tabular-nums">
                               ${Number(row.average_invoice).toFixed(2)}
                             </TableCell>
-                            <TableCell className="text-right">
+                            <TableCell className="text-right tabular-nums font-medium text-primary">
                               ${Number(row.commission).toFixed(2)}
                             </TableCell>
                           </TableRow>
                         ))}
                         <TableRow className="bg-muted/50 font-semibold">
-                          <TableCell colSpan={2}>Total</TableCell>
+                          <TableCell colSpan={3}>Total</TableCell>
                           <TableCell className="text-right">{totals.invoices}</TableCell>
                           <TableCell />
-                          <TableCell className="text-right">
-                            ${totals.revenue.toFixed(2)}
-                          </TableCell>
+                          <TableCell className="text-right">${totals.revenue.toFixed(2)}</TableCell>
                           <TableCell />
-                          <TableCell className="text-right">
+                          <TableCell className="text-right text-primary">
                             ${totals.commission.toFixed(2)}
                           </TableCell>
                         </TableRow>
@@ -247,11 +323,11 @@ const SalesPerformance = () => {
                   </TableBody>
                 </Table>
               </div>
-            )}
-          </CardContent>
-        </Card>
-      </div>
-    </>
+            </CardContent>
+          </Card>
+        </>
+      )}
+    </div>
   );
 };
 

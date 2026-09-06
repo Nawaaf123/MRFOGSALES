@@ -70,8 +70,10 @@ def main() -> int:
         admin_h = {"Authorization": f"Bearer {r.json()['access_token']}"}
 
         section("2) SHOPS + PRODUCTS")
-        shops = client.get(f"{API}/shops", headers=admin_h).json()
-        products = client.get(f"{API}/products?active_only=true&brief=true", headers=admin_h).json()
+        shops = client.get(f"{API}/shops?page=1&page_size=200", headers=admin_h).json()["items"]
+        products = client.get(
+            f"{API}/products?active_only=true&brief=true&page=1&page_size=200", headers=admin_h
+        ).json()["items"]
         if len(shops) < 1:
             print("Need at least 1 shop", file=sys.stderr)
             return 1

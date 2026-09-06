@@ -60,6 +60,7 @@ class UserUpdate(BaseModel):
 class ProductCreate(BaseModel):
     name: str
     sku: str | None = None
+    barcode: str | None = None
     category: str = "General"
     subcategory: str | None = None
     sub_subcategory: str | None = None
@@ -74,6 +75,7 @@ class ProductCreate(BaseModel):
 class ProductUpdate(BaseModel):
     name: str | None = None
     sku: str | None = None
+    barcode: str | None = None
     category: str | None = None
     subcategory: str | None = None
     sub_subcategory: str | None = None
@@ -89,6 +91,7 @@ class ProductOut(ORMModel):
     id: UUID
     name: str
     sku: str | None = None
+    barcode: str | None = None
     category: str
     subcategory: str | None
     sub_subcategory: str | None
@@ -106,6 +109,7 @@ class ProductBrief(ORMModel):
     id: UUID
     name: str
     sku: str | None = None
+    barcode: str | None = None
     category: str
     subcategory: str | None = None
     price: float
@@ -268,6 +272,41 @@ class InvoiceListOut(ORMModel):
     amount_paid: float = 0
 
 
+class InvoiceListPage(BaseModel):
+    items: list[InvoiceListOut]
+    total: int
+    page: int
+    page_size: int
+
+
+class ProductListPage(BaseModel):
+    items: list[ProductOut]
+    total: int
+    page: int
+    page_size: int
+    categories: list[str] = []
+    subcategories: list[str] = []
+    catalog_total: int = 0
+    active_count: int = 0
+    low_stock_count: int = 0
+
+
+class ProductBriefListPage(BaseModel):
+    items: list[ProductBrief]
+    total: int
+    page: int
+    page_size: int
+
+
+class ShopListPage(BaseModel):
+    items: list[ShopOut]
+    total: int
+    page: int
+    page_size: int
+    active_count: int = 0
+    frozen_count: int = 0
+
+
 class PaymentCreate(BaseModel):
     invoice_id: UUID
     amount: float = Field(gt=0)
@@ -343,6 +382,7 @@ class AnalyticsOverview(BaseModel):
     revenue: float
     discounts: float
     collected: float
+    outstanding: float = 0
     collection_rate: float
     paid_count: int
     unpaid_count: int
@@ -350,6 +390,35 @@ class AnalyticsOverview(BaseModel):
     unique_shops: int
     units_sold: int
     average_invoice: float
+
+
+class AnalyticsOverviewCompare(BaseModel):
+    current: AnalyticsOverview
+    prior: AnalyticsOverview
+    revenue_delta_pct: float | None = None
+    collected_delta_pct: float | None = None
+    outstanding_delta_pct: float | None = None
+    invoice_count_delta_pct: float | None = None
+    units_sold_delta_pct: float | None = None
+    collection_rate_delta_pp: float | None = None
+
+
+class MoneyMixRow(BaseModel):
+    paid_amount: float
+    partial_outstanding: float
+    unpaid_amount: float
+    outstanding: float
+    paid_count: int
+    partial_count: int
+    unpaid_count: int
+
+
+class QuietShopRow(BaseModel):
+    shop_id: UUID
+    shop_name: str
+    prior_invoice_count: int
+    prior_revenue: float
+    last_invoice_at: str | None = None
 
 
 class ProductSalesRow(BaseModel):
@@ -374,6 +443,7 @@ class DailySalesRow(BaseModel):
     date: str
     invoice_count: int
     revenue: float
+    collected: float = 0
 
 
 class SalesPersonPerformance(BaseModel):

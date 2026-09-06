@@ -101,6 +101,7 @@ class Product(Base):
     id: Mapped[uuid.UUID] = mapped_column(UUID(as_uuid=True), primary_key=True, default=uuid.uuid4)
     name: Mapped[str] = mapped_column(String(255), index=True)
     sku: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
+    barcode: Mapped[str | None] = mapped_column(String(64), nullable=True, index=True)
     category: Mapped[str] = mapped_column(String(120), default="General")
     subcategory: Mapped[str | None] = mapped_column(String(120), nullable=True)
     sub_subcategory: Mapped[str | None] = mapped_column(String(120), nullable=True)

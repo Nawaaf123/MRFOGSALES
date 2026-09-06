@@ -1,13 +1,20 @@
 from uuid import UUID
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
-from sqlalchemy import or_
+from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, require_roles
 from app.db.session import get_db
 from app.models import AppRole, Shop, User
-from app.schemas import GeocodeMissingResult, ShopCreate, ShopOut, ShopUpdate
+from app.schemas import (
+    GeocodeMissingResult,
+    ShopBrief,
+    ShopCreate,
+    ShopListPage,
+    ShopOut,
+    ShopUpdate,
+)
 from app.services.geocode import apply_geocode_if_needed
 
 router = APIRouter(prefix="/shops", tags=["shops"])
@@ -21,27 +28,59 @@ ADDRESS_FIELDS = {
 }
 
 
-@router.get("", response_model=list[ShopOut])
+@router.get("", response_model=ShopListPage)
 def list_shops(
     include_frozen: bool = Query(default=False),
     with_coords_only: bool = Query(default=False),
+    frozen: bool | None = Query(default=None),
+    search: str | None = Query(default=None),
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=50, ge=1, le=200),
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
-) -> list[Shop]:
-    query = db.query(Shop).order_by(Shop.name.asc())
-    if not include_frozen:
+) -> ShopListPage:
+    query = db.query(Shop)
+    if frozen is True:
+        query = query.filter(Shop.is_frozen.is_(True))
+    elif frozen is False or not include_frozen:
         query = query.filter(Shop.is_frozen.is_(False))
     if with_coords_only:
         query = query.filter(Shop.latitude.isnot(None), Shop.longitude.isnot(None))
-    return query.all()
+    if search:
+        like = f"%{search.strip()}%"
+        query = query.filter(
+            or_(
+                Shop.name.ilike(like),
+                Shop.owner_name.ilike(like),
+                Shop.phone.ilike(like),
+                Shop.email.ilike(like),
+                Shop.city.ilike(like),
+                Shop.state.ilike(like),
+            )
+        )
+
+    total = query.count()
+    shops = query.order_by(Shop.name.asc()).offset((page - 1) * page_size).limit(page_size).all()
+    active_count = db.query(func.count(Shop.id)).filter(Shop.is_frozen.is_(False)).scalar() or 0
+    frozen_count = db.query(func.count(Shop.id)).filter(Shop.is_frozen.is_(True)).scalar() or 0
+
+    return ShopListPage(
+        items=shops,
+        total=total,
+        page=page,
+        page_size=page_size,
+        active_count=int(active_count),
+        frozen_count=int(frozen_count),
+    )
 
 
-@router.get("/map", response_model=list[ShopOut])
+@router.get("/map", response_model=list[ShopBrief])
 def list_shops_for_map(
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
-) -> list[Shop]:
-    return (
+) -> list[ShopBrief]:
+    """Lightweight pin payload — only fields the map needs."""
+    rows = (
         db.query(Shop)
         .filter(
             Shop.is_frozen.is_(False),
@@ -51,6 +90,22 @@ def list_shops_for_map(
         .order_by(Shop.name.asc())
         .all()
     )
+    return [
+        ShopBrief(
+            id=shop.id,
+            name=shop.name,
+            owner_name=shop.owner_name,
+            phone=shop.phone,
+            email=shop.email,
+            street_address=shop.street_address,
+            city=shop.city,
+            state=shop.state,
+            zip_code=shop.zip_code,
+            latitude=shop.latitude,
+            longitude=shop.longitude,
+        )
+        for shop in rows
+    ]
 
 
 @router.post("/geocode-missing", response_model=GeocodeMissingResult)

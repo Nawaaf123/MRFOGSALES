@@ -28,6 +28,7 @@ import {
 import { Check, ChevronsUpDown } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api, ApiError } from "@/lib/api";
+import { fetchAllPages } from "@/lib/pagination";
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth";
 
@@ -58,8 +59,8 @@ export const AddOldBalanceDialog = ({
   const queryClient = useQueryClient();
 
   const { data: shops } = useQuery({
-    queryKey: ["shops-for-balance"],
-    queryFn: () => api<ShopOption[]>("/shops"),
+    queryKey: ["shops", "catalog", "balance"],
+    queryFn: () => fetchAllPages<ShopOption>("/shops"),
     enabled: open,
   });
 

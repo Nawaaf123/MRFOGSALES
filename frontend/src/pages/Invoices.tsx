@@ -49,6 +49,13 @@ import {
 import { useAuth } from "@/lib/auth";
 import { api, ApiError } from "@/lib/api";
 import {
+  buildPageParams,
+  DEFAULT_PAGE_SIZE,
+  fetchAllPages,
+  type Paginated,
+} from "@/lib/pagination";
+import { ListPaginationBar } from "@/components/ui/ListPaginationBar";
+import {
   clearInvoiceCreateDraft,
   draftHasWork,
   isNetworkApiError,
@@ -58,13 +65,33 @@ import {
   saveInvoiceCreateDraft,
   type InvoiceCreateDraft,
 } from "@/lib/invoiceCreateDraft";
+import {
+  buildSyncQueueItem,
+  invoiceSyncQueueQueryKey,
+  loadInvoiceSyncQueue,
+  removeInvoiceSyncQueueItem,
+  upsertInvoiceSyncQueueItem,
+} from "@/lib/invoiceSyncQueue";
+import {
+  loadOfflineProductsCache,
+  loadOfflineShopsCache,
+  saveOfflineProductsCache,
+  saveOfflineShopsCache,
+} from "@/lib/offlineCatalogCache";
+import {
+  queueItemAsLocalInvoice,
+  syncInvoiceQueueNow,
+  useInvoiceSyncQueue,
+} from "@/lib/invoiceSyncRunner";
 import { useToast } from "@/hooks/use-toast";
 import { generateInvoicePDF, saveInvoicePDF } from "@/lib/pdfGenerator";
 import { CreditDialog } from "@/components/invoices/CreditDialog";
 import { DistributePaymentDialog } from "@/components/invoices/DistributePaymentDialog";
 import { ShopInvoiceGroup } from "@/components/invoices/ShopInvoiceGroup";
+import { PageHero } from "@/components/ui/PageHero";
+import { EmptyState } from "@/components/ui/EmptyState";
 import { cn } from "@/lib/utils";
-import { Check, ChevronsUpDown, Plus, Sparkles, Trash2 } from "lucide-react";
+import { Check, ChevronsUpDown, CloudOff, FileText, Plus, RefreshCw, ScanLine, Sparkles, Trash2 } from "lucide-react";
 
 type Shop = {
   id: string;
@@ -76,6 +103,7 @@ type Product = {
   id: string;
   name: string;
   sku?: string | null;
+  barcode?: string | null;
   price: number;
   is_active: boolean;
   category: string;
@@ -134,6 +162,9 @@ type Invoice = {
   payments?: InvoicePayment[];
   shop: InvoiceShop | null;
   amount_paid: number;
+  local_sync?: "pending" | "syncing" | "failed";
+  local_sync_error?: string | null;
+  client_request_id?: string;
 };
 
 function toPdfInvoice(invoice: Invoice) {
@@ -200,11 +231,17 @@ const Invoices = () => {
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
   const [shopFilter, setShopFilter] = useState("all");
+  const [page, setPage] = useState(1);
+  const pageSize = DEFAULT_PAGE_SIZE;
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedSearch(search.trim()), 300);
     return () => window.clearTimeout(timer);
   }, [search]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [debouncedSearch, statusFilter, shopFilter]);
 
   const [createOpen, setCreateOpen] = useState(false);
   const clientRequestIdRef = useRef(newClientRequestId());
@@ -219,6 +256,9 @@ const Invoices = () => {
   const [createSubcategoryFilter, setCreateSubcategoryFilter] = useState("all");
   const [createCategoryOpen, setCreateCategoryOpen] = useState(false);
   const [createSubcategoryOpen, setCreateSubcategoryOpen] = useState(false);
+  const [gunScannerOn, setGunScannerOn] = useState(false);
+  const gunScanBufferRef = useRef("");
+  const gunScanLastKeyAtRef = useRef(0);
   const [cashAmount, setCashAmount] = useState("");
   const [checkAmount, setCheckAmount] = useState("");
   const [creditAmount, setCreditAmount] = useState("");
@@ -241,29 +281,83 @@ const Invoices = () => {
     totalPending: number;
   } | null>(null);
 
-  const invoiceQueryParams = useMemo(() => {
-    const params = new URLSearchParams();
-    if (debouncedSearch) params.set("search", debouncedSearch);
-    if (statusFilter !== "all") params.set("payment_status", statusFilter);
-    if (shopFilter !== "all") params.set("shop_id", shopFilter);
-    const qs = params.toString();
-    return qs ? `?${qs}` : "";
-  }, [debouncedSearch, statusFilter, shopFilter]);
+  const invoiceQueryParams = useMemo(
+    () =>
+      buildPageParams({
+        search: debouncedSearch || undefined,
+        payment_status: statusFilter !== "all" ? statusFilter : undefined,
+        shop_id: shopFilter !== "all" ? shopFilter : undefined,
+        page,
+        page_size: pageSize,
+      }),
+    [debouncedSearch, statusFilter, shopFilter, page, pageSize]
+  );
 
-  const { data: invoices = [], isLoading } = useQuery({
+  const { data: invoicePage, isLoading } = useQuery({
     queryKey: ["invoices", invoiceQueryParams],
-    queryFn: () => api<Invoice[]>(`/invoices${invoiceQueryParams}`),
+    queryFn: async () => {
+      try {
+        return await api<Paginated<Invoice>>(`/invoices${invoiceQueryParams}`);
+      } catch (err) {
+        if (isNetworkApiError(err as ApiError)) {
+          return { items: [] as Invoice[], total: 0, page, page_size: pageSize };
+        }
+        throw err;
+      }
+    },
   });
 
+  const invoices = invoicePage?.items ?? [];
+  const invoiceTotal = invoicePage?.total ?? 0;
+
+  useInvoiceSyncQueue(user?.id);
+  const { data: syncQueue = [] } = useQuery({
+    queryKey: user?.id ? invoiceSyncQueueQueryKey(user.id) : ["invoice-sync-queue", "anon"],
+    queryFn: () => (user?.id ? loadInvoiceSyncQueue(user.id) : []),
+    enabled: Boolean(user?.id),
+    staleTime: Infinity,
+  });
+
+  const localPendingInvoices = useMemo(
+    () => syncQueue.map((item) => queueItemAsLocalInvoice(item) as Invoice),
+    [syncQueue]
+  );
+
   const { data: shops = [] } = useQuery({
-    queryKey: ["shops"],
-    queryFn: () => api<Shop[]>("/shops"),
+    queryKey: ["shops", "catalog"],
+    queryFn: async () => {
+      try {
+        const data = await fetchAllPages<Shop>("/shops");
+        if (user?.id) saveOfflineShopsCache(user.id, data);
+        return data;
+      } catch (err) {
+        if (user?.id && isNetworkApiError(err as ApiError)) {
+          const cached = loadOfflineShopsCache<Shop>(user.id);
+          if (cached?.length) return cached;
+        }
+        throw err;
+      }
+    },
   });
 
   const { data: products = [], isLoading: productsLoading } = useQuery({
-    queryKey: ["products", "active", "brief"],
-    queryFn: () => api<Product[]>("/products?active_only=true&brief=true"),
-    enabled: createOpen,
+    queryKey: ["products", "active", "brief", "catalog"],
+    queryFn: async () => {
+      try {
+        const data = await fetchAllPages<Product>("/products", {
+          extraParams: { active_only: true, brief: true },
+        });
+        if (user?.id) saveOfflineProductsCache(user.id, data);
+        return data;
+      } catch (err) {
+        if (user?.id && isNetworkApiError(err as ApiError)) {
+          const cached = loadOfflineProductsCache<Product>(user.id);
+          if (cached?.length) return cached;
+        }
+        throw err;
+      }
+    },
+    enabled: createOpen || canCreate,
   });
 
   const createCategories = useMemo(() => {
@@ -300,6 +394,7 @@ const Invoices = () => {
       return (
         p.name.toLowerCase().includes(q) ||
         (p.sku || "").toLowerCase().includes(q) ||
+        (p.barcode || "").toLowerCase().includes(q) ||
         p.category.toLowerCase().includes(q) ||
         (p.subcategory || "").toLowerCase().includes(q)
       );
@@ -352,7 +447,7 @@ const Invoices = () => {
       }
     >();
 
-    for (const invoice of invoices) {
+    const mergeRow = (invoice: Invoice) => {
       const sid = invoice.shop_id || invoice.shop?.id || "unknown";
       const shop = invoice.shop;
       const location = shop
@@ -369,6 +464,20 @@ const Invoices = () => {
           invoices: [invoice],
         });
       }
+    };
+
+    for (const invoice of invoices) mergeRow(invoice);
+
+    // Local pending creates (this device only) — filter by shop if shop filter set
+    for (const local of localPendingInvoices) {
+      if (shopFilter !== "all" && local.shop_id !== shopFilter) continue;
+      if (statusFilter !== "all" && local.payment_status !== statusFilter) continue;
+      if (debouncedSearch) {
+        const q = debouncedSearch.toLowerCase();
+        const hay = `${local.invoice_number} ${local.shop?.name || ""}`.toLowerCase();
+        if (!hay.includes(q)) continue;
+      }
+      mergeRow(local);
     }
 
     return Array.from(map.values())
@@ -379,12 +488,14 @@ const Invoices = () => {
         ),
         pending: g.invoices.reduce(
           (sum, inv) =>
-            sum + Math.max(0, Number(inv.total_amount) - Number(inv.amount_paid || 0)),
+            inv.local_sync
+              ? sum
+              : sum + Math.max(0, Number(inv.total_amount) - Number(inv.amount_paid || 0)),
           0
         ),
       }))
       .sort((a, b) => b.pending - a.pending || a.shopName.localeCompare(b.shopName));
-  }, [invoices]);
+  }, [invoices, localPendingInvoices, shopFilter, statusFilter, debouncedSearch]);
 
   const refetchInvoices = () => {
     queryClient.invalidateQueries({ queryKey: ["invoices"] });
@@ -525,6 +636,99 @@ const Invoices = () => {
     });
   };
 
+  const findProductByCode = (raw: string) => {
+    const code = raw.trim().toLowerCase();
+    if (!code) return null;
+    const byBarcode = products.find((p) => (p.barcode || "").trim().toLowerCase() === code);
+    if (byBarcode) return byBarcode;
+    return products.find((p) => (p.sku || "").trim().toLowerCase() === code) || null;
+  };
+
+  const applyScannedCode = (raw: string) => {
+    const product = findProductByCode(raw);
+    if (!product) {
+      toast({
+        title: "No product found",
+        description: `No barcode/SKU match for “${raw.trim()}”`,
+        variant: "destructive",
+      });
+      return;
+    }
+    addProductQuick(product);
+    setProductSearch("");
+    toast({ title: "Added", description: product.name });
+  };
+
+  const applyScannedCodeRef = useRef(applyScannedCode);
+  applyScannedCodeRef.current = applyScannedCode;
+
+  // Bluetooth gun scanner mode: capture keystrokes page-wide (works while scrolling).
+  useEffect(() => {
+    if (!createOpen) {
+      setGunScannerOn(false);
+      gunScanBufferRef.current = "";
+    }
+  }, [createOpen]);
+
+  useEffect(() => {
+    if (!createOpen || !gunScannerOn) return;
+
+    const isTypingField = (target: EventTarget | null) => {
+      if (!(target instanceof HTMLElement)) return false;
+      const tag = target.tagName;
+      if (tag === "TEXTAREA" || tag === "SELECT") return true;
+      if (target.isContentEditable) return true;
+      if (tag === "INPUT") {
+        const type = ((target as HTMLInputElement).type || "text").toLowerCase();
+        return !["button", "checkbox", "radio", "submit", "reset", "file", "hidden"].includes(type);
+      }
+      return false;
+    };
+
+    const onKeyDown = (e: KeyboardEvent) => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      // Let normal typing in notes / amounts / search work; gun works everywhere else (incl. scroll).
+      if (isTypingField(e.target)) return;
+
+      const now = Date.now();
+      // Scanners burst keys quickly; slow gaps start a new code.
+      if (now - gunScanLastKeyAtRef.current > 80) {
+        gunScanBufferRef.current = "";
+      }
+      gunScanLastKeyAtRef.current = now;
+
+      if (e.key === "Enter") {
+        e.preventDefault();
+        e.stopPropagation();
+        const code = gunScanBufferRef.current.trim();
+        gunScanBufferRef.current = "";
+        if (code) applyScannedCodeRef.current(code);
+        return;
+      }
+
+      if (e.key.length === 1) {
+        e.preventDefault();
+        e.stopPropagation();
+        gunScanBufferRef.current += e.key;
+      }
+    };
+
+    window.addEventListener("keydown", onKeyDown, true);
+    return () => window.removeEventListener("keydown", onKeyDown, true);
+  }, [createOpen, gunScannerOn]);
+
+  const toggleGunScanner = () => {
+    setGunScannerOn((on) => {
+      const next = !on;
+      if (next) {
+        gunScanBufferRef.current = "";
+        const active = document.activeElement;
+        if (active instanceof HTMLElement) active.blur();
+      }
+      return next;
+    });
+  };
+
   const updateLine = (index: number, field: "quantity" | "unit_price", value: number) => {
     const next = [...items];
     const safe = Number.isFinite(value) && value >= 0 ? value : 0;
@@ -536,8 +740,51 @@ const Invoices = () => {
     setItems(next);
   };
 
+  const enqueueCurrentCreate = () => {
+    if (!user?.id) throw { message: "Not signed in" } satisfies ApiError;
+    if (!isValidUuid(shopId)) throw { message: "Select a shop" } satisfies ApiError;
+    if (items.length === 0) throw { message: "Add at least one product" } satisfies ApiError;
+    if (!isValidUuid(clientRequestIdRef.current)) {
+      clientRequestIdRef.current = newClientRequestId();
+    }
+
+    const payments: Array<{ amount: number; payment_method: PaymentMethod }> = [];
+    const cash = Number(cashAmount) || 0;
+    const check = Number(checkAmount) || 0;
+    const credit = Number(creditAmount) || 0;
+    if (cash > 0) payments.push({ amount: cash, payment_method: "cash" });
+    if (check > 0) payments.push({ amount: check, payment_method: "check" });
+    if (credit > 0) payments.push({ amount: credit, payment_method: "credit" });
+
+    const shopName = shops.find((s) => s.id === shopId)?.name || "Unknown shop";
+    const queueItem = buildSyncQueueItem({
+      userId: user.id,
+      clientRequestId: clientRequestIdRef.current,
+      shopId,
+      shopName,
+      notes: notes.trim() || null,
+      discountAmount: discount,
+      warehouse,
+      items: items
+        .filter((item) => isValidUuid(item.product_id))
+        .map((item) => ({
+          product_id: item.product_id,
+          product_name: item.product_name,
+          quantity: item.quantity,
+          unit_price: item.unit_price,
+          subtotal: item.subtotal,
+        })),
+      payments,
+    });
+    upsertInvoiceSyncQueueItem(user.id, queueItem);
+    queryClient.setQueryData(invoiceSyncQueueQueryKey(user.id), loadInvoiceSyncQueue(user.id));
+  };
+
   const createMutation = useMutation({
-    mutationFn: async () => {
+    // Default RQ networkMode is "online" — mutations pause forever when the browser
+    // reports offline, so Create never queues. Always run so we can save locally.
+    networkMode: "always",
+    mutationFn: async (): Promise<{ mode: "created"; invoice: Invoice } | { mode: "queued" }> => {
       if (!isValidUuid(shopId)) throw { message: "Select a shop" } satisfies ApiError;
       if (items.length === 0) throw { message: "Add at least one product" } satisfies ApiError;
       if (createPaymentsTotal > totalAmount + 0.01) {
@@ -546,6 +793,7 @@ const Invoices = () => {
       if (!isValidUuid(clientRequestIdRef.current)) {
         clientRequestIdRef.current = newClientRequestId();
       }
+      if (!user?.id) throw { message: "Not signed in" } satisfies ApiError;
 
       const payments: Array<{ amount: number; payment_method: PaymentMethod }> = [];
       const cash = Number(cashAmount) || 0;
@@ -555,21 +803,26 @@ const Invoices = () => {
       if (check > 0) payments.push({ amount: check, payment_method: "check" });
       if (credit > 0) payments.push({ amount: credit, payment_method: "credit" });
 
-      // Persist immediately before network call so a crash mid-request still restores.
-      if (user?.id) {
-        saveInvoiceCreateDraft(user.id, {
-          version: 1,
-          client_request_id: clientRequestIdRef.current,
-          shop_id: shopId,
-          notes,
-          discount_amount: discountAmount,
-          warehouse,
-          items,
-          cash_amount: cashAmount,
-          check_amount: checkAmount,
-          credit_amount: creditAmount,
-          updated_at: new Date().toISOString(),
-        });
+      // Persist working draft, then always enqueue first (safe with client_request_id).
+      saveInvoiceCreateDraft(user.id, {
+        version: 1,
+        client_request_id: clientRequestIdRef.current,
+        shop_id: shopId,
+        notes,
+        discount_amount: discountAmount,
+        warehouse,
+        items,
+        cash_amount: cashAmount,
+        check_amount: checkAmount,
+        credit_amount: creditAmount,
+        updated_at: new Date().toISOString(),
+      });
+      enqueueCurrentCreate();
+
+      const offline =
+        typeof navigator !== "undefined" && navigator.onLine === false;
+      if (offline) {
+        return { mode: "queued" };
       }
 
       const body = JSON.stringify({
@@ -590,20 +843,50 @@ const Invoices = () => {
         payments,
       });
 
-      const maxAttempts = 4;
-      let lastError: ApiError = { message: "Create failed" };
-      for (let attempt = 0; attempt < maxAttempts; attempt++) {
-        try {
-          return await api<Invoice>("/invoices", { method: "POST", body });
-        } catch (err) {
-          lastError = err as ApiError;
-          if (!isNetworkApiError(lastError) || attempt === maxAttempts - 1) throw lastError;
-          await new Promise((r) => setTimeout(r, 600 * (attempt + 1)));
+      const requestId = clientRequestIdRef.current;
+      const hardTimeoutMs = 2500;
+      const abort = new AbortController();
+      const wallClock = new Promise<never>((_, reject) => {
+        window.setTimeout(() => {
+          abort.abort();
+          reject({ message: "Request timed out", status: 0 } satisfies ApiError);
+        }, hardTimeoutMs);
+      });
+
+      try {
+        const invoice = await Promise.race([
+          api<Invoice>("/invoices", {
+            method: "POST",
+            body,
+            timeoutMs: hardTimeoutMs,
+            signal: abort.signal,
+          }),
+          wallClock,
+        ]);
+        removeInvoiceSyncQueueItem(user.id, requestId);
+        queryClient.setQueryData(invoiceSyncQueueQueryKey(user.id), loadInvoiceSyncQueue(user.id));
+        return { mode: "created", invoice };
+      } catch (err) {
+        const error = err as ApiError;
+        if (isNetworkApiError(error)) {
+          return { mode: "queued" };
         }
+        // Real validation/business error — don't leave a fake pending row.
+        removeInvoiceSyncQueueItem(user.id, requestId);
+        queryClient.setQueryData(invoiceSyncQueueQueryKey(user.id), loadInvoiceSyncQueue(user.id));
+        throw error;
       }
-      throw lastError;
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
+      if (result.mode === "queued") {
+        setCreateOpen(false);
+        resetCreateForm({ clearDraft: true });
+        toast({
+          title: "Saved offline — pending sync",
+          description: "It appears on Invoices as Pending sync and uploads when you’re back online.",
+        });
+        return;
+      }
       queryClient.invalidateQueries({ queryKey: ["invoices"] });
       queryClient.invalidateQueries({ queryKey: ["products"] });
       queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
@@ -612,17 +895,55 @@ const Invoices = () => {
       toast({ title: "Invoice created" });
     },
     onError: (error: ApiError) => {
-      if (isNetworkApiError(error)) {
-        toast({
-          title: "No network — draft saved",
-          description: "Your invoice is kept on this phone. Tap Create again when you’re online (won’t double).",
-          variant: "destructive",
-        });
-        return;
-      }
       toast({ title: "Error", description: error.message, variant: "destructive" });
     },
   });
+
+  const [syncNowBusy, setSyncNowBusy] = useState(false);
+
+  const handleSyncNow = async () => {
+    if (!user?.id) return;
+    setSyncNowBusy(true);
+    try {
+      const result = await syncInvoiceQueueNow(user.id);
+      queryClient.setQueryData(invoiceSyncQueueQueryKey(user.id), loadInvoiceSyncQueue(user.id));
+      if (result.synced > 0) {
+        refetchInvoices();
+        queryClient.invalidateQueries({ queryKey: ["products"] });
+        toast({
+          title: result.synced === 1 ? "Invoice synced" : `${result.synced} invoices synced`,
+        });
+      } else if (result.failed > 0) {
+        toast({
+          title: "Some invoices failed to sync",
+          description: "Check the Pending sync rows for details.",
+          variant: "destructive",
+        });
+      } else if (typeof navigator !== "undefined" && navigator.onLine === false) {
+        toast({
+          title: "Still offline",
+          description: "Pending invoices will sync when the network returns.",
+          variant: "destructive",
+        });
+      } else {
+        toast({ title: "Nothing to sync" });
+      }
+    } finally {
+      setSyncNowBusy(false);
+    }
+  };
+
+  const handleRetryLocalSync = async (inv: { client_request_id?: string }) => {
+    if (!user?.id || !inv.client_request_id) return;
+    await handleSyncNow();
+  };
+
+  const handleDiscardLocalSync = (inv: { client_request_id?: string }) => {
+    if (!user?.id || !inv.client_request_id) return;
+    removeInvoiceSyncQueueItem(user.id, inv.client_request_id);
+    queryClient.setQueryData(invoiceSyncQueueQueryKey(user.id), loadInvoiceSyncQueue(user.id));
+    toast({ title: "Removed from sync queue" });
+  };
 
   const suggestOrderMutation = useMutation({
     mutationFn: () => {
@@ -825,27 +1146,83 @@ const Invoices = () => {
   return (
     <>
       <div className="space-y-4">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h1 className="text-2xl font-bold">Invoices</h1>
-            <p className="text-muted-foreground">Create invoices, track balances, and record payments</p>
-          </div>
-          {canCreate && (
-            <Button
-              className="w-full sm:w-auto h-11"
-              onClick={openCreateInvoice}
-            >
-              <Plus className="h-4 w-4 mr-2" />
-              New Invoice
-            </Button>
-          )}
-        </div>
+        <PageHero
+          icon={FileText}
+          title="Invoices"
+          description="Create invoices, track balances, and record payments"
+          stats={[
+            {
+              label: "Total",
+              value: isLoading ? "…" : invoiceTotal + localPendingInvoices.length,
+              accent: true,
+            },
+            {
+              label: "Pending sync",
+              value: String(localPendingInvoices.length),
+            },
+            {
+              label: "On page",
+              value: isLoading ? "…" : invoices.length,
+            },
+            {
+              label: "Open $",
+              value: isLoading
+                ? "…"
+                : `$${invoices
+                    .reduce(
+                      (sum, i) =>
+                        sum + Math.max(0, Number(i.total_amount) - Number(i.amount_paid || 0)),
+                      0
+                    )
+                    .toFixed(0)}`,
+            },
+          ]}
+          action={
+            canCreate ? (
+              <Button className="h-11 w-full shadow-sm shadow-primary/25 sm:w-auto" onClick={openCreateInvoice}>
+                <Plus className="mr-2 h-4 w-4" />
+                New Invoice
+              </Button>
+            ) : undefined
+          }
+        />
 
-        <Card className="p-4">
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
+        {syncQueue.length > 0 && (
+          <Card className="border-amber-500/30 bg-amber-500/5 p-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-start gap-3">
+                <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-amber-500/15 text-amber-800 dark:text-amber-200">
+                  <CloudOff className="h-5 w-5" />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-foreground">
+                    {syncQueue.length} invoice{syncQueue.length === 1 ? "" : "s"} waiting to sync
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Saved on this device only. They upload automatically when you’re online. PDF/email
+                    unlock after sync.
+                  </p>
+                </div>
+              </div>
+              <Button
+                type="button"
+                className="h-11 w-full sm:w-auto"
+                disabled={syncNowBusy}
+                onClick={() => void handleSyncNow()}
+              >
+                <RefreshCw className={`mr-2 h-4 w-4 ${syncNowBusy ? "animate-spin" : ""}`} />
+                {syncNowBusy ? "Syncing…" : "Sync now"}
+              </Button>
+            </div>
+          </Card>
+        )}
+
+        <Card className="border-primary/10 p-4">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
             <div className="space-y-2">
               <Label>Search</Label>
               <Input
+                className="h-11"
                 placeholder="Invoice #, shop, city..."
                 value={search}
                 onChange={(e) => setSearch(e.target.value)}
@@ -854,7 +1231,7 @@ const Invoices = () => {
             <div className="space-y-2">
               <Label>Payment Status</Label>
               <Select value={statusFilter} onValueChange={setStatusFilter}>
-                <SelectTrigger>
+                <SelectTrigger className="h-11">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -868,7 +1245,7 @@ const Invoices = () => {
             <div className="space-y-2">
               <Label>Shop</Label>
               <Select value={shopFilter} onValueChange={setShopFilter}>
-                <SelectTrigger>
+                <SelectTrigger className="h-11">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -886,9 +1263,25 @@ const Invoices = () => {
 
         <div className="space-y-2">
           {isLoading ? (
-            <p className="text-sm text-muted-foreground py-8 text-center">Loading...</p>
+            <div className="space-y-3">
+              {[0, 1, 2].map((i) => (
+                <div key={i} className="h-24 animate-pulse rounded-xl border border-border bg-muted/60" />
+              ))}
+            </div>
           ) : shopGroups.length === 0 ? (
-            <p className="text-sm text-muted-foreground py-8 text-center">No invoices found</p>
+            <EmptyState
+              icon={FileText}
+              title="No invoices found"
+              description="Try another search or status, or create a new invoice"
+              action={
+                canCreate ? (
+                  <Button className="h-11" onClick={openCreateInvoice}>
+                    <Plus className="mr-2 h-4 w-4" />
+                    New Invoice
+                  </Button>
+                ) : undefined
+              }
+            />
           ) : (
             shopGroups.map((group) => (
               <ShopInvoiceGroup
@@ -905,8 +1298,16 @@ const Invoices = () => {
                   payment_status: inv.payment_status,
                   created_at: inv.created_at,
                   amount_paid: inv.amount_paid,
+                  local_sync: inv.local_sync,
+                  local_sync_error: inv.local_sync_error,
+                  client_request_id: inv.client_request_id,
                 }))}
                 onViewInvoice={(inv) => {
+                  if (inv.local_sync) {
+                    const local = localPendingInvoices.find((i) => i.id === inv.id);
+                    if (local) setViewInvoice(local);
+                    return;
+                  }
                   void (async () => {
                     try {
                       const full = await api<Invoice>(`/invoices/${inv.id}`);
@@ -921,22 +1322,52 @@ const Invoices = () => {
                   })();
                 }}
                 onRecordPayment={(inv) => {
+                  if (inv.local_sync) {
+                    toast({
+                      title: "Not synced yet",
+                      description: "Record payments after this invoice uploads.",
+                      variant: "destructive",
+                    });
+                    return;
+                  }
                   const row = invoices.find((i) => i.id === inv.id);
                   if (row) openPayment(row);
                 }}
                 onExportPDF={(inv) => {
+                  if (inv.local_sync) {
+                    toast({
+                      title: "PDF after sync",
+                      description: "Official PDF is available once the invoice is on the server.",
+                      variant: "destructive",
+                    });
+                    return;
+                  }
                   const row = invoices.find((i) => i.id === inv.id);
                   if (row) void exportPdf(row);
                 }}
                 onSendEmail={(inv) => {
+                  if (inv.local_sync) {
+                    toast({
+                      title: "Email after sync",
+                      description: "Email is available once the invoice is on the server.",
+                      variant: "destructive",
+                    });
+                    return;
+                  }
                   const row = invoices.find((i) => i.id === inv.id);
                   if (row) void emailInvoice(row);
                 }}
                 sendingEmailId={emailingId}
                 onDeleteInvoice={(inv) => {
+                  if (inv.local_sync) {
+                    handleDiscardLocalSync(inv);
+                    return;
+                  }
                   const row = invoices.find((i) => i.id === inv.id) || null;
                   setDeleteInvoice(row);
                 }}
+                onRetryLocalSync={(inv) => void handleRetryLocalSync(inv)}
+                onDiscardLocalSync={handleDiscardLocalSync}
                 onDistributePayment={(shopId, shopName, pendingInvs, totalPending) => {
                   const fullInvoices = pendingInvs
                     .map((p) => invoices.find((i) => i.id === p.id))
@@ -955,6 +1386,13 @@ const Invoices = () => {
               />
             ))
           )}
+          <ListPaginationBar
+            page={page}
+            pageSize={pageSize}
+            total={invoiceTotal}
+            onPageChange={setPage}
+            className="pt-2"
+          />
         </div>
       </div>
 
@@ -965,11 +1403,16 @@ const Invoices = () => {
           // Closing keeps the on-device draft; only success / explicit new form clears it.
         }}
       >
-        <DialogContent className="max-w-2xl w-[calc(100vw-1rem)] sm:w-full max-h-[90dvh] overflow-x-hidden overflow-y-auto p-3 sm:p-6">
-          <DialogHeader>
-            <DialogTitle>Create Invoice</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4 min-w-0 overflow-x-hidden">
+        <DialogContent className="max-h-[90dvh] w-[calc(100vw-1rem)] max-w-2xl overflow-x-hidden overflow-y-auto p-0 sm:w-full">
+          <div className="border-b border-primary/10 bg-gradient-to-r from-primary/15 to-transparent px-3 py-4 sm:px-6">
+            <DialogHeader>
+              <DialogTitle className="flex items-center gap-2 text-xl">
+                <FileText className="h-5 w-5 text-primary" />
+                Create Invoice
+              </DialogTitle>
+            </DialogHeader>
+          </div>
+          <div className="min-w-0 space-y-4 overflow-x-hidden p-3 sm:p-6">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-2 min-w-0">
                 <Label>Shop *</Label>
@@ -1023,16 +1466,67 @@ const Invoices = () => {
             <div className="space-y-3 rounded-md border p-3 min-w-0">
               <div className="flex flex-col gap-0.5">
                 <Label className="text-base">Products</Label>
-                <span className="text-xs text-muted-foreground">Tap a product to add · change qty below</span>
+                <span className="text-xs text-muted-foreground">
+                  Tap a product to add · change qty below
+                </span>
               </div>
 
+              {gunScannerOn && (
+                <div className="flex items-center justify-between gap-3 rounded-lg border border-primary/25 bg-primary/10 px-3 py-2.5">
+                  <div className="min-w-0">
+                    <p className="text-sm font-semibold text-primary">Scanner on</p>
+                    <p className="text-xs text-muted-foreground">
+                      Scan anytime — scroll is OK. Soft keyboard stays closed.
+                    </p>
+                  </div>
+                  <Button
+                    type="button"
+                    variant="outline"
+                    className="h-10 shrink-0"
+                    onClick={toggleGunScanner}
+                  >
+                    Stop
+                  </Button>
+                </div>
+              )}
+
               <div className="grid grid-cols-1 gap-2 min-w-0">
-                <Input
-                  placeholder="Search SKU or flavor..."
-                  value={productSearch}
-                  onChange={(e) => setProductSearch(e.target.value)}
-                  className="w-full min-w-0"
-                />
+                <div className="flex gap-2 min-w-0">
+                  <Input
+                    placeholder="Search SKU, barcode, or flavor…"
+                    value={productSearch}
+                    onChange={(e) => setProductSearch(e.target.value)}
+                    onKeyDown={(e) => {
+                      if (e.key !== "Enter") return;
+                      const code = productSearch.trim();
+                      if (!code) return;
+                      // Fallback when gun mode is off: scanner typed into this box
+                      if (findProductByCode(code)) {
+                        e.preventDefault();
+                        applyScannedCode(code);
+                      }
+                    }}
+                    className="w-full min-w-0 h-11 font-mono"
+                  />
+                  <Button
+                    type="button"
+                    variant={gunScannerOn ? "default" : "outline"}
+                    className={cn(
+                      "h-11 shrink-0 px-3",
+                      !gunScannerOn && "border-primary/30"
+                    )}
+                    title={gunScannerOn ? "Stop Bluetooth scanner mode" : "Bluetooth scanner mode"}
+                    disabled={productsLoading || products.length === 0}
+                    onClick={toggleGunScanner}
+                  >
+                    <ScanLine className="h-5 w-5" />
+                  </Button>
+                </div>
+                {!gunScannerOn && (
+                  <p className="text-xs text-muted-foreground">
+                    External gun: tap the scan button (no soft keyboard). Scroll while scanning is OK.
+                  </p>
+                )}
 
                 <div className="grid grid-cols-1 sm:grid-cols-2 gap-2 min-w-0">
                 <Popover open={createCategoryOpen} onOpenChange={setCreateCategoryOpen}>
@@ -1411,7 +1905,7 @@ const Invoices = () => {
                   createMutation.mutate();
                 }}
               >
-                {createMutation.isPending ? "Creating..." : "Create Invoice"}
+                {createMutation.isPending ? "Saving…" : "Create Invoice"}
               </Button>
             </div>
           </div>
@@ -1419,16 +1913,18 @@ const Invoices = () => {
       </Dialog>
 
       <Dialog open={!!paymentInvoice} onOpenChange={(open) => !open && setPaymentInvoice(null)}>
-        <DialogContent className="max-w-md">
-          <DialogHeader>
-            <DialogTitle>Record Payment</DialogTitle>
-          </DialogHeader>
-          <div className="space-y-4">
+        <DialogContent className="max-w-md overflow-hidden p-0">
+          <div className="border-b border-primary/10 bg-gradient-to-r from-primary/15 to-transparent px-6 py-4">
+            <DialogHeader>
+              <DialogTitle>Record Payment</DialogTitle>
+            </DialogHeader>
+          </div>
+          <div className="space-y-4 p-6">
             <div>
               <p className="text-sm text-muted-foreground">
                 {paymentInvoice?.invoice_number} · {paymentInvoice?.shop?.name}
               </p>
-              <p className="text-2xl font-bold mt-1">${remainingForPayment.toFixed(2)}</p>
+              <p className="mt-1 text-2xl font-bold text-primary">${remainingForPayment.toFixed(2)}</p>
               <p className="text-xs text-muted-foreground">Remaining balance</p>
             </div>
             <div className="space-y-2">
@@ -1437,6 +1933,7 @@ const Invoices = () => {
                 type="number"
                 min="0.01"
                 step="0.01"
+                className="h-11"
                 value={payAmount}
                 onChange={(e) => setPayAmount(e.target.value)}
               />
@@ -1444,7 +1941,7 @@ const Invoices = () => {
             <div className="space-y-2">
               <Label>Method</Label>
               <Select value={payMethod} onValueChange={(v) => setPayMethod(v as PaymentMethod)}>
-                <SelectTrigger>
+                <SelectTrigger className="h-11">
                   <SelectValue />
                 </SelectTrigger>
                 <SelectContent>
@@ -1458,6 +1955,7 @@ const Invoices = () => {
               <div className="space-y-2">
                 <Label>Check number</Label>
                 <Input
+                  className="h-11"
                   value={payCheckNumber}
                   onChange={(e) => setPayCheckNumber(e.target.value)}
                 />
@@ -1467,12 +1965,12 @@ const Invoices = () => {
               <Label>Notes</Label>
               <Textarea value={payNotes} onChange={(e) => setPayNotes(e.target.value)} rows={2} />
             </div>
-            <div className="flex flex-col-reverse sm:flex-row sm:justify-end gap-2">
-              <Button variant="outline" className="w-full sm:w-auto h-11" onClick={() => setPaymentInvoice(null)}>
+            <div className="flex flex-col-reverse gap-2 sm:flex-row sm:justify-end">
+              <Button variant="outline" className="h-11 w-full sm:w-auto" onClick={() => setPaymentInvoice(null)}>
                 Cancel
               </Button>
               <Button
-                className="w-full sm:w-auto h-11"
+                className="h-11 w-full sm:w-auto"
                 disabled={paymentMutation.isPending}
                 onClick={() => paymentMutation.mutate()}
               >
@@ -1493,12 +1991,14 @@ const Invoices = () => {
       )}
 
       <Dialog open={!!viewInvoice} onOpenChange={(open) => !open && setViewInvoice(null)}>
-        <DialogContent className="max-w-lg max-h-[85vh] overflow-y-auto">
-          <DialogHeader>
-            <DialogTitle>{viewInvoice?.invoice_number}</DialogTitle>
-          </DialogHeader>
+        <DialogContent className="max-h-[85vh] max-w-lg overflow-hidden p-0">
+          <div className="border-b border-primary/10 bg-gradient-to-r from-primary/15 to-transparent px-6 py-4">
+            <DialogHeader>
+              <DialogTitle className="text-xl">{viewInvoice?.invoice_number}</DialogTitle>
+            </DialogHeader>
+          </div>
           {viewInvoice && (
-            <div className="space-y-4 text-sm">
+            <div className="max-h-[calc(85vh-5rem)] space-y-4 overflow-y-auto p-6 text-sm">
               <div className="flex items-center justify-between gap-2">
                 <div>
                   <p className="font-medium">{viewInvoice.shop?.name || "Unknown shop"}</p>
@@ -1506,10 +2006,29 @@ const Invoices = () => {
                     {new Date(viewInvoice.created_at).toLocaleString()}
                   </p>
                 </div>
-                <Badge variant={statusBadgeVariant(viewInvoice.payment_status)} className="capitalize">
-                  {viewInvoice.payment_status}
-                </Badge>
+                {viewInvoice.local_sync ? (
+                  <Badge
+                    variant={viewInvoice.local_sync === "failed" ? "destructive" : "secondary"}
+                    className="capitalize"
+                  >
+                    {viewInvoice.local_sync === "failed"
+                      ? "Sync failed"
+                      : viewInvoice.local_sync === "syncing"
+                        ? "Syncing…"
+                        : "Pending sync"}
+                  </Badge>
+                ) : (
+                  <Badge variant={statusBadgeVariant(viewInvoice.payment_status)} className="capitalize">
+                    {viewInvoice.payment_status}
+                  </Badge>
+                )}
               </div>
+              {viewInvoice.local_sync && (
+                <p className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-900 dark:text-amber-100">
+                  {viewInvoice.local_sync_error ||
+                    "Saved on this device only. It will upload when you’re online. PDF/email after sync."}
+                </p>
+              )}
               <div className="grid grid-cols-3 gap-3">
                 <div>
                   <p className="text-muted-foreground text-xs">Total</p>
@@ -1576,6 +2095,7 @@ const Invoices = () => {
               )}
               <div className="flex flex-wrap justify-end gap-2 pt-2">
                 {canCreate &&
+                  !viewInvoice.local_sync &&
                   Math.max(
                     0,
                     Number(viewInvoice.total_amount) - Number(viewInvoice.amount_paid || 0)
@@ -1602,6 +2122,27 @@ const Invoices = () => {
                       </Button>
                     </>
                   )}
+                {canCreate && viewInvoice.local_sync && (
+                  <>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        handleDiscardLocalSync(viewInvoice);
+                        setViewInvoice(null);
+                      }}
+                    >
+                      Remove
+                    </Button>
+                    <Button
+                      size="sm"
+                      disabled={syncNowBusy || viewInvoice.local_sync === "syncing"}
+                      onClick={() => void handleRetryLocalSync(viewInvoice)}
+                    >
+                      Sync now
+                    </Button>
+                  </>
+                )}
               </div>
             </div>
           )}

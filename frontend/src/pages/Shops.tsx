@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState, lazy, Suspense } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -20,9 +20,34 @@ import {
 } from "@/components/ui/table";
 import { useAuth } from "@/lib/auth";
 import { api, ApiError } from "@/lib/api";
+import {
+  buildPageParams,
+  DEFAULT_PAGE_SIZE,
+  type Paginated,
+} from "@/lib/pagination";
+import { ListPaginationBar } from "@/components/ui/ListPaginationBar";
 import { useToast } from "@/hooks/use-toast";
 import { BulkUploadDialog } from "@/components/shops/BulkUploadDialog";
-import { Edit, Mail, MapPin, Phone, Plus, Snowflake, Sun, Upload } from "lucide-react";
+import { PageHero } from "@/components/ui/PageHero";
+import { EmptyState } from "@/components/ui/EmptyState";
+import { FilterChips } from "@/components/ui/FilterChips";
+import { cn } from "@/lib/utils";
+import {
+  Edit,
+  Loader2,
+  Mail,
+  MapPin,
+  Phone,
+  Plus,
+  ShoppingBag,
+  Snowflake,
+  Sun,
+  Upload,
+} from "lucide-react";
+
+const LocationsMap = lazy(() =>
+  import("@/components/location/SalesMap").then((m) => ({ default: m.LocationsMap }))
+);
 
 type Shop = {
   id: string;
@@ -106,30 +131,50 @@ const Shops = () => {
   const isAdmin = user?.role === "admin";
 
   const [search, setSearch] = useState("");
+  const [debouncedSearch, setDebouncedSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState<"all" | "active" | "frozen">("all");
   const [open, setOpen] = useState(false);
   const [bulkOpen, setBulkOpen] = useState(false);
   const [editing, setEditing] = useState<Shop | null>(null);
   const [form, setForm] = useState<ShopFormState>(emptyForm);
+  const [page, setPage] = useState(1);
+  const pageSize = DEFAULT_PAGE_SIZE;
 
-  const { data: shops = [], isLoading } = useQuery({
-    queryKey: ["shops", "include_frozen"],
-    queryFn: () => api<Shop[]>("/shops?include_frozen=true"),
+  useEffect(() => {
+    const timer = window.setTimeout(() => setDebouncedSearch(search.trim()), 300);
+    return () => window.clearTimeout(timer);
+  }, [search]);
+
+  useEffect(() => {
+    setPage(1);
+  }, [debouncedSearch, statusFilter]);
+
+  const listParams = useMemo(
+    () =>
+      buildPageParams({
+        include_frozen: true,
+        frozen: statusFilter === "frozen" ? true : statusFilter === "active" ? false : undefined,
+        search: debouncedSearch || undefined,
+        page,
+        page_size: pageSize,
+      }),
+    [debouncedSearch, statusFilter, page, pageSize]
+  );
+
+  const { data: shopPage, isLoading } = useQuery({
+    queryKey: ["shops", "include_frozen", listParams],
+    queryFn: () =>
+      api<Paginated<Shop> & { active_count?: number; frozen_count?: number }>(
+        `/shops${listParams}`
+      ),
     staleTime: 2 * 60_000,
   });
 
-  const filtered = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    if (!q) return shops;
-    return shops.filter(
-      (s) =>
-        s.name.toLowerCase().includes(q) ||
-        (s.owner_name || "").toLowerCase().includes(q) ||
-        (s.phone || "").toLowerCase().includes(q) ||
-        (s.email || "").toLowerCase().includes(q) ||
-        (s.city || "").toLowerCase().includes(q) ||
-        (s.state || "").toLowerCase().includes(q)
-    );
-  }, [shops, search]);
+  const shops = shopPage?.items ?? [];
+  const shopTotal = shopPage?.total ?? 0;
+  const activeCount = shopPage?.active_count ?? 0;
+  const frozenCount = shopPage?.frozen_count ?? 0;
+  const catalogTotal = activeCount + frozenCount;
 
   const saveMutation = useMutation({
     mutationFn: () => {
@@ -229,42 +274,78 @@ const Shops = () => {
   return (
     <>
       <div className="space-y-4">
-        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
-          <div>
-            <h1 className="text-2xl font-bold">Shops</h1>
-            <p className="text-muted-foreground">Retail accounts and customer contacts</p>
-          </div>
-          {canManage && (
-            <div className="grid grid-cols-1 sm:flex sm:flex-wrap gap-2 w-full sm:w-auto">
-              {isAdmin && (
+        <PageHero
+          icon={ShoppingBag}
+          title="Shops"
+          description="Retail accounts and customer contacts"
+          stats={[
+            { label: "Total", value: catalogTotal, accent: true },
+            { label: "Active", value: activeCount },
+            { label: "Frozen", value: frozenCount },
+          ]}
+          action={
+            canManage ? (
+              <div className="grid w-full grid-cols-1 gap-2 sm:flex sm:w-auto sm:flex-wrap">
+                {isAdmin && (
+                  <Button
+                    variant="outline"
+                    className="h-11 w-full border-primary/25 sm:w-auto"
+                    disabled={geocodeMutation.isPending}
+                    onClick={() => geocodeMutation.mutate()}
+                  >
+                    <MapPin className="mr-2 h-4 w-4" />
+                    {geocodeMutation.isPending ? "Geocoding..." : "Geocode"}
+                  </Button>
+                )}
                 <Button
                   variant="outline"
-                  className="w-full sm:w-auto h-11"
-                  disabled={geocodeMutation.isPending}
-                  onClick={() => geocodeMutation.mutate()}
+                  className="h-11 w-full border-primary/25 sm:w-auto"
+                  onClick={() => setBulkOpen(true)}
                 >
-                  <MapPin className="h-4 w-4 mr-2" />
-                  {geocodeMutation.isPending ? "Geocoding..." : "Geocode missing"}
+                  <Upload className="mr-2 h-4 w-4" />
+                  Bulk Import
                 </Button>
-              )}
-              <Button variant="outline" className="w-full sm:w-auto h-11" onClick={() => setBulkOpen(true)}>
-                <Upload className="h-4 w-4 mr-2" />
-                Bulk Import
-              </Button>
-              <Button className="w-full sm:w-auto h-11" onClick={openCreate}>
-                <Plus className="h-4 w-4 mr-2" />
-                Add Shop
-              </Button>
-            </div>
-          )}
-        </div>
+                <Button className="h-11 w-full shadow-sm shadow-primary/25 sm:w-auto" onClick={openCreate}>
+                  <Plus className="mr-2 h-4 w-4" />
+                  Add Shop
+                </Button>
+              </div>
+            ) : undefined
+          }
+        />
+
+        <FilterChips
+          value={statusFilter}
+          onChange={(id) => setStatusFilter(id as "all" | "active" | "frozen")}
+          items={[
+            { id: "all", label: "All", count: catalogTotal },
+            { id: "active", label: "Active", count: activeCount },
+            { id: "frozen", label: "Frozen", count: frozenCount },
+          ]}
+        />
 
         <Input
           placeholder="Search shops by name, owner, phone, city..."
           value={search}
           onChange={(e) => setSearch(e.target.value)}
-          className="w-full max-w-md"
+          className="h-11 w-full max-w-md"
         />
+
+        <div className="space-y-2">
+          <h2 className="text-lg font-semibold">Shop map</h2>
+          <p className="text-sm text-muted-foreground">
+            Red markers show shops with geocoded addresses
+          </p>
+          <Suspense
+            fallback={
+              <div className="flex h-[320px] items-center justify-center rounded-lg border">
+                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+              </div>
+            }
+          >
+            <LocationsMap heightClassName="h-[320px] md:h-[420px]" pollSales={false} />
+          </Suspense>
+        </div>
 
         <BulkUploadDialog
           open={bulkOpen}
@@ -278,23 +359,44 @@ const Shops = () => {
         {/* Mobile cards */}
         <div className="md:hidden space-y-3">
           {isLoading ? (
-            <p className="text-sm text-muted-foreground py-8 text-center">Loading...</p>
-          ) : filtered.length === 0 ? (
-            <p className="text-sm text-muted-foreground py-8 text-center">No shops found</p>
+            <div className="space-y-3">
+              {[0, 1, 2].map((i) => (
+                <div key={i} className="h-28 animate-pulse rounded-xl bg-muted" />
+              ))}
+            </div>
+          ) : shops.length === 0 ? (
+            <EmptyState icon={ShoppingBag} title="No shops found" description="Try another search or status filter" />
           ) : (
-            filtered.map((shop) => (
+            shops.map((shop) => (
               <div
                 key={shop.id}
-                className={`rounded-lg border bg-card p-4 space-y-3 ${shop.is_frozen ? "opacity-70" : ""}`}
+                className={cn(
+                  "relative space-y-3 overflow-hidden rounded-xl border bg-card p-4 pl-5",
+                  shop.is_frozen && "opacity-80"
+                )}
               >
+                <div
+                  className={cn(
+                    "absolute inset-y-0 left-0 w-1",
+                    shop.is_frozen ? "bg-muted-foreground/40" : "bg-primary"
+                  )}
+                />
                 <div className="flex items-start justify-between gap-2">
                   <div className="min-w-0">
-                    <p className="font-semibold truncate">{shop.name}</p>
+                    <p className="truncate font-semibold">{shop.name}</p>
                     {shop.owner_name && (
-                      <p className="text-sm text-muted-foreground truncate">{shop.owner_name}</p>
+                      <p className="truncate text-sm text-muted-foreground">{shop.owner_name}</p>
                     )}
                   </div>
-                  <Badge variant={shop.is_frozen ? "secondary" : "default"} className="shrink-0">
+                  <Badge
+                    className={cn(
+                      "shrink-0",
+                      shop.is_frozen
+                        ? "bg-muted text-muted-foreground hover:bg-muted"
+                        : "bg-primary/15 text-primary hover:bg-primary/15"
+                    )}
+                    variant="secondary"
+                  >
                     {shop.is_frozen ? "Frozen" : "Active"}
                   </Badge>
                 </div>
@@ -334,12 +436,12 @@ const Shops = () => {
                       >
                         {shop.is_frozen ? (
                           <>
-                            <Sun className="h-4 w-4 mr-2 text-orange-500" />
+                            <Sun className="mr-2 h-4 w-4 text-primary" />
                             Unfreeze
                           </>
                         ) : (
                           <>
-                            <Snowflake className="h-4 w-4 mr-2 text-blue-500" />
+                            <Snowflake className="mr-2 h-4 w-4 text-primary" />
                             Freeze
                           </>
                         )}
@@ -357,10 +459,10 @@ const Shops = () => {
         </div>
 
         {/* Desktop table */}
-        <div className="hidden md:block rounded-md border overflow-x-auto">
+        <div className="hidden overflow-x-auto rounded-xl border border-primary/10 md:block">
           <Table>
             <TableHeader>
-              <TableRow>
+              <TableRow className="bg-muted/40 hover:bg-muted/40">
                 <TableHead>Shop</TableHead>
                 <TableHead>Owner</TableHead>
                 <TableHead>Contact</TableHead>
@@ -374,19 +476,19 @@ const Shops = () => {
                 <TableRow>
                   <TableCell colSpan={canManage ? 6 : 5}>Loading...</TableCell>
                 </TableRow>
-              ) : filtered.length === 0 ? (
+              ) : shops.length === 0 ? (
                 <TableRow>
                   <TableCell colSpan={canManage ? 6 : 5}>No shops found</TableCell>
                 </TableRow>
               ) : (
-                filtered.map((shop) => (
+                shops.map((shop) => (
                   <TableRow key={shop.id} className={shop.is_frozen ? "opacity-70" : undefined}>
                     <TableCell className="font-medium">
                       <div className="flex items-center gap-2 flex-wrap">
                         {shop.name}
                         {shop.is_frozen && (
-                          <Badge variant="outline" className="text-xs border-blue-400 text-blue-600">
-                            <Snowflake className="h-3 w-3 mr-1" />
+                          <Badge variant="outline" className="border-primary/40 text-xs text-primary">
+                            <Snowflake className="mr-1 h-3 w-3" />
                             Frozen
                           </Badge>
                         )}
@@ -440,9 +542,9 @@ const Shops = () => {
                               }
                             >
                               {shop.is_frozen ? (
-                                <Sun className="h-4 w-4 text-orange-500" />
+                                <Sun className="h-4 w-4 text-primary" />
                               ) : (
-                                <Snowflake className="h-4 w-4 text-blue-500" />
+                                <Snowflake className="h-4 w-4 text-primary" />
                               )}
                             </Button>
                           )}
@@ -458,6 +560,12 @@ const Shops = () => {
             </TableBody>
           </Table>
         </div>
+        <ListPaginationBar
+          page={page}
+          pageSize={pageSize}
+          total={shopTotal}
+          onPageChange={setPage}
+        />
       </div>
 
       <Dialog

@@ -17,6 +17,7 @@ import * as XLSX from "xlsx";
 type ProductCreateRow = {
   name: string;
   sku: string | null;
+  barcode: string | null;
   price: number;
   stock_quantity: number;
   low_stock_threshold: number;
@@ -55,6 +56,7 @@ export const BulkProductUploadDialog = ({
       {
         "Product Name": "Example Product",
         SKU: "EX01-US",
+        Barcode: "012345678905",
         Price: 9.99,
         Stock: 100,
         "Min Stock": 10,
@@ -66,6 +68,7 @@ export const BulkProductUploadDialog = ({
     ws["!cols"] = [
       { wch: 30 },
       { wch: 14 },
+      { wch: 16 },
       { wch: 10 },
       { wch: 10 },
       { wch: 12 },
@@ -129,6 +132,7 @@ export const BulkProductUploadDialog = ({
             return {
               name: cell(row, "Product Name", "Name", "name"),
               sku: cell(row, "SKU", "Sku", "sku") || null,
+              barcode: cell(row, "Barcode", "BARCODE", "barcode") || null,
               price: parseFloat(cell(row, "Price", "price") || "0") || 0,
               stock_quantity: parseInt(stockRaw || "0", 10) || 0,
               low_stock_threshold: parseInt(minStockRaw || "10", 10) || 0,
@@ -183,8 +187,8 @@ export const BulkProductUploadDialog = ({
         <div className="space-y-4">
           <div className="p-4 bg-muted rounded-lg space-y-2">
             <p className="text-sm text-muted-foreground">
-              Download the template, fill in your products, and upload it back. Matching SKUs
-              update existing products.
+              Download the template, fill in your products, and upload it back. Matching barcode or SKU
+              updates existing products.
             </p>
             <Button variant="outline" size="sm" onClick={downloadTemplate}>
               <Download className="h-4 w-4 mr-2" />

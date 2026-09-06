@@ -28,22 +28,23 @@ export function MobileBottomNav() {
       });
     } else if (kind === "shops") {
       void queryClient.prefetchQuery({
-        queryKey: ["shops", "include_frozen"],
-        queryFn: () => api("/shops?include_frozen=true"),
+        queryKey: ["shops", "include_frozen", "prefetch"],
+        queryFn: () =>
+          api("/shops?include_frozen=true&page=1&page_size=50"),
       });
     } else if (kind === "invoices") {
       void queryClient.prefetchQuery({
-        queryKey: ["invoices", ""],
-        queryFn: () => api("/invoices"),
+        queryKey: ["invoices", "?page=1&page_size=50"],
+        queryFn: () => api("/invoices?page=1&page_size=50"),
       });
       void queryClient.prefetchQuery({
-        queryKey: ["shops"],
-        queryFn: () => api("/shops"),
+        queryKey: ["shops", "catalog"],
+        queryFn: () => api("/shops?page=1&page_size=50"),
       });
     } else if (kind === "products") {
       void queryClient.prefetchQuery({
-        queryKey: ["products"],
-        queryFn: () => api("/products"),
+        queryKey: ["products", "prefetch"],
+        queryFn: () => api("/products?page=1&page_size=1"),
       });
     }
   };
@@ -63,12 +64,15 @@ export function MobileBottomNav() {
               onPointerDown={() => prefetch(item.prefetch)}
               onClick={() => navigate(item.path)}
               className={cn(
-                "flex flex-col items-center justify-center gap-0.5 text-[10px] font-medium transition-colors touch-manipulation",
+                "relative flex flex-col items-center justify-center gap-0.5 text-[10px] font-medium transition-colors touch-manipulation",
                 active ? "text-primary" : "text-muted-foreground"
               )}
             >
+              {active && (
+                <span className="absolute inset-x-6 top-0 h-0.5 rounded-full bg-primary" />
+              )}
               <item.icon className={cn("h-5 w-5", active && "stroke-[2.5px]")} />
-              {item.label}
+              <span className={cn(active && "font-semibold")}>{item.label}</span>
             </button>
           );
         })}

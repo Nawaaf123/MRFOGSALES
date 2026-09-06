@@ -58,6 +58,21 @@ resource "aws_security_group" "app" {
   }
 
   tags = { Name = "${local.name}-ec2-sg" }
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+# Separate rule so adding HTTPS does not replace the security group (avoids attach deadlock).
+resource "aws_security_group_rule" "https" {
+  type              = "ingress"
+  description       = "HTTPS"
+  from_port         = 443
+  to_port           = 443
+  protocol          = "tcp"
+  cidr_blocks       = ["0.0.0.0/0"]
+  security_group_id = aws_security_group.app.id
 }
 
 resource "aws_instance" "app" {
