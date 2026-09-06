@@ -190,7 +190,7 @@ const Dashboard = () => {
                 Locations map
               </h2>
               <p className="text-sm text-muted-foreground">
-                Shop pins and live salesperson GPS
+                Red markers show shop locations
               </p>
             </div>
             {!showMap && (

@@ -7,7 +7,7 @@ from sqlalchemy.orm import Session
 from app.api.deps import get_current_user, require_roles
 from app.db.session import get_db
 from app.models import AppRole, Shop, User
-from app.schemas import GeocodeMissingResult, ShopCreate, ShopOut, ShopUpdate
+from app.schemas import GeocodeMissingResult, ShopBrief, ShopCreate, ShopOut, ShopUpdate
 from app.services.geocode import apply_geocode_if_needed
 
 router = APIRouter(prefix="/shops", tags=["shops"])
@@ -36,12 +36,13 @@ def list_shops(
     return query.all()
 
 
-@router.get("/map", response_model=list[ShopOut])
+@router.get("/map", response_model=list[ShopBrief])
 def list_shops_for_map(
     db: Session = Depends(get_db),
     _: User = Depends(get_current_user),
-) -> list[Shop]:
-    return (
+) -> list[ShopBrief]:
+    """Lightweight pin payload — only fields the map needs."""
+    rows = (
         db.query(Shop)
         .filter(
             Shop.is_frozen.is_(False),
@@ -51,6 +52,22 @@ def list_shops_for_map(
         .order_by(Shop.name.asc())
         .all()
     )
+    return [
+        ShopBrief(
+            id=shop.id,
+            name=shop.name,
+            owner_name=shop.owner_name,
+            phone=shop.phone,
+            email=shop.email,
+            street_address=shop.street_address,
+            city=shop.city,
+            state=shop.state,
+            zip_code=shop.zip_code,
+            latitude=shop.latitude,
+            longitude=shop.longitude,
+        )
+        for shop in rows
+    ]
 
 
 @router.post("/geocode-missing", response_model=GeocodeMissingResult)

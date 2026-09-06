@@ -347,6 +347,7 @@ class AnalyticsOverview(BaseModel):
     revenue: float
     discounts: float
     collected: float
+    outstanding: float = 0
     collection_rate: float
     paid_count: int
     unpaid_count: int
@@ -354,6 +355,35 @@ class AnalyticsOverview(BaseModel):
     unique_shops: int
     units_sold: int
     average_invoice: float
+
+
+class AnalyticsOverviewCompare(BaseModel):
+    current: AnalyticsOverview
+    prior: AnalyticsOverview
+    revenue_delta_pct: float | None = None
+    collected_delta_pct: float | None = None
+    outstanding_delta_pct: float | None = None
+    invoice_count_delta_pct: float | None = None
+    units_sold_delta_pct: float | None = None
+    collection_rate_delta_pp: float | None = None
+
+
+class MoneyMixRow(BaseModel):
+    paid_amount: float
+    partial_outstanding: float
+    unpaid_amount: float
+    outstanding: float
+    paid_count: int
+    partial_count: int
+    unpaid_count: int
+
+
+class QuietShopRow(BaseModel):
+    shop_id: UUID
+    shop_name: str
+    prior_invoice_count: int
+    prior_revenue: float
+    last_invoice_at: str | None = None
 
 
 class ProductSalesRow(BaseModel):
@@ -378,6 +408,7 @@ class DailySalesRow(BaseModel):
     date: str
     invoice_count: int
     revenue: float
+    collected: float = 0
 
 
 class SalesPersonPerformance(BaseModel):

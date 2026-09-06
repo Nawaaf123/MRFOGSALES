@@ -1,4 +1,3 @@
-const API_URL = import.meta.env.VITE_API_URL || "http://localhost:8000/api";
 const TOKEN_KEY = "cf_access_token";
 
 export type ApiError = { message: string; status?: number };
@@ -7,6 +6,17 @@ export type ApiOptions = RequestInit & {
   /** Abort the request after this many ms (treat as network failure). */
   timeoutMs?: number;
 };
+
+/** Resolve API base for browser (relative `/api` → same-origin absolute URL). */
+function apiBaseUrl(): string {
+  const raw = (import.meta.env.VITE_API_URL || "/api").trim().replace(/\/$/, "");
+  if (/^https?:\/\//i.test(raw)) return raw;
+  const path = raw.startsWith("/") ? raw : `/${raw}`;
+  if (typeof window !== "undefined" && window.location?.origin) {
+    return `${window.location.origin}${path}`;
+  }
+  return path;
+}
 
 export function getToken(): string | null {
   return localStorage.getItem(TOKEN_KEY);
@@ -37,12 +47,15 @@ export async function api<T>(path: string, options: ApiOptions = {}): Promise<T>
     timeoutId = setTimeout(() => controller.abort(), timeoutMs);
   }
 
+  const url = `${apiBaseUrl()}${path.startsWith("/") ? path : `/${path}`}`;
+
   let response: Response;
   try {
-    response = await fetch(`${API_URL}${path}`, {
+    response = await fetch(url, {
       ...fetchInit,
       headers,
       signal: controller.signal,
+      cache: "no-store",
     });
   } catch (err) {
     const aborted =

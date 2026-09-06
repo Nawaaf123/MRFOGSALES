@@ -13,6 +13,7 @@ interface StatsCardProps {
   trend?: {
     value: number;
     isPositive: boolean;
+    label?: string;
   };
 }
 
@@ -61,7 +62,8 @@ export const StatsCard = ({
               trend.isPositive ? "text-primary" : "text-destructive"
             )}
           >
-            {trend.isPositive ? "↑" : "↓"} {Math.abs(trend.value)}% from last month
+            {trend.isPositive ? "↑" : "↓"} {Math.abs(trend.value).toFixed(0)}%{" "}
+            {trend.label || "vs prior period"}
           </p>
         )}
       </CardContent>

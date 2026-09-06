@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useMemo, useState, lazy, Suspense } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -26,7 +26,22 @@ import { PageHero } from "@/components/ui/PageHero";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { FilterChips } from "@/components/ui/FilterChips";
 import { cn } from "@/lib/utils";
-import { Edit, Mail, MapPin, Phone, Plus, ShoppingBag, Snowflake, Sun, Upload } from "lucide-react";
+import {
+  Edit,
+  Loader2,
+  Mail,
+  MapPin,
+  Phone,
+  Plus,
+  ShoppingBag,
+  Snowflake,
+  Sun,
+  Upload,
+} from "lucide-react";
+
+const LocationsMap = lazy(() =>
+  import("@/components/location/SalesMap").then((m) => ({ default: m.LocationsMap }))
+);
 
 type Shop = {
   id: string;
@@ -296,6 +311,22 @@ const Shops = () => {
           onChange={(e) => setSearch(e.target.value)}
           className="h-11 w-full max-w-md"
         />
+
+        <div className="space-y-2">
+          <h2 className="text-lg font-semibold">Shop map</h2>
+          <p className="text-sm text-muted-foreground">
+            Red markers show shops with geocoded addresses
+          </p>
+          <Suspense
+            fallback={
+              <div className="flex h-[320px] items-center justify-center rounded-lg border">
+                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
+              </div>
+            }
+          >
+            <LocationsMap heightClassName="h-[320px] md:h-[420px]" pollSales={false} />
+          </Suspense>
+        </div>
 
         <BulkUploadDialog
           open={bulkOpen}
