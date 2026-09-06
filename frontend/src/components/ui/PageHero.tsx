@@ -64,7 +64,8 @@ export function PageHero({
             "relative mt-5 grid gap-3",
             stats.length === 1 && "sm:max-w-xs",
             stats.length === 2 && "grid-cols-2 sm:max-w-md",
-            stats.length >= 3 && "grid-cols-2 sm:grid-cols-3 sm:max-w-2xl"
+            stats.length === 3 && "grid-cols-2 sm:grid-cols-3 sm:max-w-2xl",
+            stats.length >= 4 && "grid-cols-2 sm:grid-cols-4 sm:max-w-3xl"
           )}
         >
           {stats.map((stat) => (

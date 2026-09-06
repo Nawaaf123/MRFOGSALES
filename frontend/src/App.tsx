@@ -31,6 +31,11 @@ const queryClient = new QueryClient({
       gcTime: 10 * 60_000,
       refetchOnWindowFocus: false,
       retry: 1,
+      networkMode: "always",
+    },
+    mutations: {
+      // Allow offline invoice create / sync queue to run when navigator.onLine is false.
+      networkMode: "always",
     },
   },
 });

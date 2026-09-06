@@ -1,5 +1,16 @@
 import { useState } from "react";
-import { ChevronDown, ChevronRight, DollarSign, Plus, Eye, Download, Trash2, Mail, Loader2 } from "lucide-react";
+import {
+  ChevronDown,
+  ChevronRight,
+  DollarSign,
+  Plus,
+  Eye,
+  Download,
+  Trash2,
+  Mail,
+  Loader2,
+  RefreshCw,
+} from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import {
@@ -22,6 +33,10 @@ export type ShopGroupInvoice = {
   payment_status: "paid" | "partial" | "unpaid";
   created_at: string;
   amount_paid: number;
+  /** Present when this row is a local offline create waiting to upload. */
+  local_sync?: "pending" | "syncing" | "failed";
+  local_sync_error?: string | null;
+  client_request_id?: string;
 };
 
 interface ShopInvoiceGroupProps {
@@ -35,6 +50,8 @@ interface ShopInvoiceGroupProps {
   onSendEmail: (invoice: ShopGroupInvoice) => void;
   sendingEmailId: string | null;
   onDeleteInvoice: (invoice: ShopGroupInvoice) => void;
+  onRetryLocalSync?: (invoice: ShopGroupInvoice) => void;
+  onDiscardLocalSync?: (invoice: ShopGroupInvoice) => void;
   onDistributePayment: (
     shopId: string,
     shopName: string,
@@ -62,6 +79,8 @@ export const ShopInvoiceGroup = ({
   onSendEmail,
   sendingEmailId,
   onDeleteInvoice,
+  onRetryLocalSync,
+  onDiscardLocalSync,
   onDistributePayment,
   canManage,
   isAdmin,
@@ -71,15 +90,32 @@ export const ShopInvoiceGroup = ({
   const [isExpanded, setIsExpanded] = useState(false);
   const [legacyBalanceDialogOpen, setLegacyBalanceDialogOpen] = useState(false);
 
-  const getStatusBadge = (status: string) => {
-    if (status === "paid") {
+  const getStatusBadge = (invoice: ShopGroupInvoice) => {
+    if (invoice.local_sync === "failed") {
+      return <Badge variant="destructive">Sync failed</Badge>;
+    }
+    if (invoice.local_sync === "syncing") {
+      return (
+        <Badge className="border-transparent bg-primary/15 text-primary hover:bg-primary/15">
+          Syncing…
+        </Badge>
+      );
+    }
+    if (invoice.local_sync === "pending") {
+      return (
+        <Badge className="border-transparent bg-amber-500/15 text-amber-800 hover:bg-amber-500/15 dark:text-amber-200">
+          Pending sync
+        </Badge>
+      );
+    }
+    if (invoice.payment_status === "paid") {
       return (
         <Badge className="border-transparent bg-primary/15 text-primary hover:bg-primary/15 capitalize">
           Paid
         </Badge>
       );
     }
-    if (status === "partial") {
+    if (invoice.payment_status === "partial") {
       return (
         <Badge variant="secondary" className="capitalize">
           Partial
@@ -93,9 +129,10 @@ export const ShopInvoiceGroup = ({
     );
   };
 
+  const serverInvoices = invoices.filter((inv) => !inv.local_sync);
   const totalAmount = invoices.reduce((sum, inv) => sum + Number(inv.total_amount), 0);
-  const totalPending = invoices.reduce((sum, inv) => sum + pendingOf(inv), 0);
-  const invoicesWithPending = invoices.filter((inv) => pendingOf(inv) > 0.01);
+  const totalPending = serverInvoices.reduce((sum, inv) => sum + pendingOf(inv), 0);
+  const invoicesWithPending = serverInvoices.filter((inv) => pendingOf(inv) > 0.01);
 
   const creatorName = (createdBy: string | null) => {
     if (!createdBy) return "Unknown";
@@ -106,6 +143,47 @@ export const ShopInvoiceGroup = ({
     const variant = outline ? "outline" : "ghost";
     const pending = pendingOf(invoice);
     const btnClass = outline ? "h-10 min-w-10 flex-1 sm:flex-none" : "h-8 w-8 p-0";
+
+    if (invoice.local_sync) {
+      return (
+        <>
+          <Button variant={variant} size="sm" className={btnClass} onClick={() => onViewInvoice(invoice)} title="View">
+            <Eye className="h-4 w-4" />
+            {outline && <span className="ml-1 sm:hidden text-xs">View</span>}
+          </Button>
+          {canManage && (
+            <Button
+              variant={variant}
+              size="sm"
+              className={btnClass}
+              onClick={() => onRetryLocalSync?.(invoice)}
+              title="Retry sync"
+              disabled={invoice.local_sync === "syncing"}
+            >
+              {invoice.local_sync === "syncing" ? (
+                <Loader2 className="h-4 w-4 animate-spin" />
+              ) : (
+                <RefreshCw className="h-4 w-4" />
+              )}
+              {outline && <span className="ml-1 sm:hidden text-xs">Sync</span>}
+            </Button>
+          )}
+          {canManage && (
+            <Button
+              variant={variant}
+              size="sm"
+              className={btnClass}
+              onClick={() => onDiscardLocalSync?.(invoice)}
+              title="Remove from queue"
+            >
+              <Trash2 className="h-4 w-4 text-destructive" />
+              {outline && <span className="ml-1 sm:hidden text-xs text-destructive">Remove</span>}
+            </Button>
+          )}
+        </>
+      );
+    }
+
     return (
       <>
         <Button variant={variant} size="sm" className={btnClass} onClick={() => onViewInvoice(invoice)} title="View">
@@ -253,7 +331,7 @@ export const ShopInvoiceGroup = ({
                           {new Date(invoice.created_at).toLocaleDateString()}
                         </p>
                       </div>
-                      {getStatusBadge(invoice.payment_status)}
+                      {getStatusBadge(invoice)}
                     </div>
 
                     <div className="grid grid-cols-2 gap-2 text-sm mb-3">
@@ -272,6 +350,9 @@ export const ShopInvoiceGroup = ({
                         </p>
                       </div>
                     </div>
+                    {invoice.local_sync_error && (
+                      <p className="mb-2 text-xs text-destructive">{invoice.local_sync_error}</p>
+                    )}
 
                     <div className="flex flex-wrap gap-1 border-t pt-2">
                       {actionButtons(invoice, true)}
@@ -314,7 +395,14 @@ export const ShopInvoiceGroup = ({
                           ${pendingAmount.toFixed(2)}
                         </span>
                       </TableCell>
-                      <TableCell>{getStatusBadge(invoice.payment_status)}</TableCell>
+                      <TableCell>
+                        <div className="space-y-1">
+                          {getStatusBadge(invoice)}
+                          {invoice.local_sync_error && (
+                            <p className="max-w-[12rem] text-xs text-destructive">{invoice.local_sync_error}</p>
+                          )}
+                        </div>
+                      </TableCell>
                       <TableCell>{creatorName(invoice.created_by)}</TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1">{actionButtons(invoice, false)}</div>

@@ -58,6 +58,24 @@ import {
   saveInvoiceCreateDraft,
   type InvoiceCreateDraft,
 } from "@/lib/invoiceCreateDraft";
+import {
+  buildSyncQueueItem,
+  invoiceSyncQueueQueryKey,
+  loadInvoiceSyncQueue,
+  removeInvoiceSyncQueueItem,
+  upsertInvoiceSyncQueueItem,
+} from "@/lib/invoiceSyncQueue";
+import {
+  loadOfflineProductsCache,
+  loadOfflineShopsCache,
+  saveOfflineProductsCache,
+  saveOfflineShopsCache,
+} from "@/lib/offlineCatalogCache";
+import {
+  queueItemAsLocalInvoice,
+  syncInvoiceQueueNow,
+  useInvoiceSyncQueue,
+} from "@/lib/invoiceSyncRunner";
 import { useToast } from "@/hooks/use-toast";
 import { generateInvoicePDF, saveInvoicePDF } from "@/lib/pdfGenerator";
 import { CreditDialog } from "@/components/invoices/CreditDialog";
@@ -67,7 +85,7 @@ import { PageHero } from "@/components/ui/PageHero";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { BarcodeScanDialog } from "@/components/products/BarcodeScanDialog";
 import { cn } from "@/lib/utils";
-import { Check, ChevronsUpDown, FileText, Plus, ScanBarcode, Sparkles, Trash2 } from "lucide-react";
+import { Check, ChevronsUpDown, CloudOff, FileText, Plus, RefreshCw, ScanBarcode, Sparkles, Trash2 } from "lucide-react";
 
 type Shop = {
   id: string;
@@ -138,6 +156,9 @@ type Invoice = {
   payments?: InvoicePayment[];
   shop: InvoiceShop | null;
   amount_paid: number;
+  local_sync?: "pending" | "syncing" | "failed";
+  local_sync_error?: string | null;
+  client_request_id?: string;
 };
 
 function toPdfInvoice(invoice: Invoice) {
@@ -257,18 +278,62 @@ const Invoices = () => {
 
   const { data: invoices = [], isLoading } = useQuery({
     queryKey: ["invoices", invoiceQueryParams],
-    queryFn: () => api<Invoice[]>(`/invoices${invoiceQueryParams}`),
+    queryFn: async () => {
+      try {
+        return await api<Invoice[]>(`/invoices${invoiceQueryParams}`);
+      } catch (err) {
+        if (isNetworkApiError(err as ApiError)) return [] as Invoice[];
+        throw err;
+      }
+    },
   });
+
+  useInvoiceSyncQueue(user?.id);
+  const { data: syncQueue = [] } = useQuery({
+    queryKey: user?.id ? invoiceSyncQueueQueryKey(user.id) : ["invoice-sync-queue", "anon"],
+    queryFn: () => (user?.id ? loadInvoiceSyncQueue(user.id) : []),
+    enabled: Boolean(user?.id),
+    staleTime: Infinity,
+  });
+
+  const localPendingInvoices = useMemo(
+    () => syncQueue.map((item) => queueItemAsLocalInvoice(item) as Invoice),
+    [syncQueue]
+  );
 
   const { data: shops = [] } = useQuery({
     queryKey: ["shops"],
-    queryFn: () => api<Shop[]>("/shops"),
+    queryFn: async () => {
+      try {
+        const data = await api<Shop[]>("/shops");
+        if (user?.id) saveOfflineShopsCache(user.id, data);
+        return data;
+      } catch (err) {
+        if (user?.id && isNetworkApiError(err as ApiError)) {
+          const cached = loadOfflineShopsCache<Shop>(user.id);
+          if (cached?.length) return cached;
+        }
+        throw err;
+      }
+    },
   });
 
   const { data: products = [], isLoading: productsLoading } = useQuery({
     queryKey: ["products", "active", "brief"],
-    queryFn: () => api<Product[]>("/products?active_only=true&brief=true"),
-    enabled: createOpen,
+    queryFn: async () => {
+      try {
+        const data = await api<Product[]>("/products?active_only=true&brief=true");
+        if (user?.id) saveOfflineProductsCache(user.id, data);
+        return data;
+      } catch (err) {
+        if (user?.id && isNetworkApiError(err as ApiError)) {
+          const cached = loadOfflineProductsCache<Product>(user.id);
+          if (cached?.length) return cached;
+        }
+        throw err;
+      }
+    },
+    enabled: createOpen || canCreate,
   });
 
   const createCategories = useMemo(() => {
@@ -358,7 +423,7 @@ const Invoices = () => {
       }
     >();
 
-    for (const invoice of invoices) {
+    const mergeRow = (invoice: Invoice) => {
       const sid = invoice.shop_id || invoice.shop?.id || "unknown";
       const shop = invoice.shop;
       const location = shop
@@ -375,6 +440,20 @@ const Invoices = () => {
           invoices: [invoice],
         });
       }
+    };
+
+    for (const invoice of invoices) mergeRow(invoice);
+
+    // Local pending creates (this device only) — filter by shop if shop filter set
+    for (const local of localPendingInvoices) {
+      if (shopFilter !== "all" && local.shop_id !== shopFilter) continue;
+      if (statusFilter !== "all" && local.payment_status !== statusFilter) continue;
+      if (debouncedSearch) {
+        const q = debouncedSearch.toLowerCase();
+        const hay = `${local.invoice_number} ${local.shop?.name || ""}`.toLowerCase();
+        if (!hay.includes(q)) continue;
+      }
+      mergeRow(local);
     }
 
     return Array.from(map.values())
@@ -385,12 +464,14 @@ const Invoices = () => {
         ),
         pending: g.invoices.reduce(
           (sum, inv) =>
-            sum + Math.max(0, Number(inv.total_amount) - Number(inv.amount_paid || 0)),
+            inv.local_sync
+              ? sum
+              : sum + Math.max(0, Number(inv.total_amount) - Number(inv.amount_paid || 0)),
           0
         ),
       }))
       .sort((a, b) => b.pending - a.pending || a.shopName.localeCompare(b.shopName));
-  }, [invoices]);
+  }, [invoices, localPendingInvoices, shopFilter, statusFilter, debouncedSearch]);
 
   const refetchInvoices = () => {
     queryClient.invalidateQueries({ queryKey: ["invoices"] });
@@ -565,8 +646,51 @@ const Invoices = () => {
     setItems(next);
   };
 
+  const enqueueCurrentCreate = () => {
+    if (!user?.id) throw { message: "Not signed in" } satisfies ApiError;
+    if (!isValidUuid(shopId)) throw { message: "Select a shop" } satisfies ApiError;
+    if (items.length === 0) throw { message: "Add at least one product" } satisfies ApiError;
+    if (!isValidUuid(clientRequestIdRef.current)) {
+      clientRequestIdRef.current = newClientRequestId();
+    }
+
+    const payments: Array<{ amount: number; payment_method: PaymentMethod }> = [];
+    const cash = Number(cashAmount) || 0;
+    const check = Number(checkAmount) || 0;
+    const credit = Number(creditAmount) || 0;
+    if (cash > 0) payments.push({ amount: cash, payment_method: "cash" });
+    if (check > 0) payments.push({ amount: check, payment_method: "check" });
+    if (credit > 0) payments.push({ amount: credit, payment_method: "credit" });
+
+    const shopName = shops.find((s) => s.id === shopId)?.name || "Unknown shop";
+    const queueItem = buildSyncQueueItem({
+      userId: user.id,
+      clientRequestId: clientRequestIdRef.current,
+      shopId,
+      shopName,
+      notes: notes.trim() || null,
+      discountAmount: discount,
+      warehouse,
+      items: items
+        .filter((item) => isValidUuid(item.product_id))
+        .map((item) => ({
+          product_id: item.product_id,
+          product_name: item.product_name,
+          quantity: item.quantity,
+          unit_price: item.unit_price,
+          subtotal: item.subtotal,
+        })),
+      payments,
+    });
+    upsertInvoiceSyncQueueItem(user.id, queueItem);
+    queryClient.setQueryData(invoiceSyncQueueQueryKey(user.id), loadInvoiceSyncQueue(user.id));
+  };
+
   const createMutation = useMutation({
-    mutationFn: async () => {
+    // Default RQ networkMode is "online" — mutations pause forever when the browser
+    // reports offline, so Create never queues. Always run so we can save locally.
+    networkMode: "always",
+    mutationFn: async (): Promise<{ mode: "created"; invoice: Invoice } | { mode: "queued" }> => {
       if (!isValidUuid(shopId)) throw { message: "Select a shop" } satisfies ApiError;
       if (items.length === 0) throw { message: "Add at least one product" } satisfies ApiError;
       if (createPaymentsTotal > totalAmount + 0.01) {
@@ -575,6 +699,7 @@ const Invoices = () => {
       if (!isValidUuid(clientRequestIdRef.current)) {
         clientRequestIdRef.current = newClientRequestId();
       }
+      if (!user?.id) throw { message: "Not signed in" } satisfies ApiError;
 
       const payments: Array<{ amount: number; payment_method: PaymentMethod }> = [];
       const cash = Number(cashAmount) || 0;
@@ -584,21 +709,26 @@ const Invoices = () => {
       if (check > 0) payments.push({ amount: check, payment_method: "check" });
       if (credit > 0) payments.push({ amount: credit, payment_method: "credit" });
 
-      // Persist immediately before network call so a crash mid-request still restores.
-      if (user?.id) {
-        saveInvoiceCreateDraft(user.id, {
-          version: 1,
-          client_request_id: clientRequestIdRef.current,
-          shop_id: shopId,
-          notes,
-          discount_amount: discountAmount,
-          warehouse,
-          items,
-          cash_amount: cashAmount,
-          check_amount: checkAmount,
-          credit_amount: creditAmount,
-          updated_at: new Date().toISOString(),
-        });
+      // Persist working draft, then always enqueue first (safe with client_request_id).
+      saveInvoiceCreateDraft(user.id, {
+        version: 1,
+        client_request_id: clientRequestIdRef.current,
+        shop_id: shopId,
+        notes,
+        discount_amount: discountAmount,
+        warehouse,
+        items,
+        cash_amount: cashAmount,
+        check_amount: checkAmount,
+        credit_amount: creditAmount,
+        updated_at: new Date().toISOString(),
+      });
+      enqueueCurrentCreate();
+
+      const offline =
+        typeof navigator !== "undefined" && navigator.onLine === false;
+      if (offline) {
+        return { mode: "queued" };
       }
 
       const body = JSON.stringify({
@@ -619,20 +749,50 @@ const Invoices = () => {
         payments,
       });
 
-      const maxAttempts = 4;
-      let lastError: ApiError = { message: "Create failed" };
-      for (let attempt = 0; attempt < maxAttempts; attempt++) {
-        try {
-          return await api<Invoice>("/invoices", { method: "POST", body });
-        } catch (err) {
-          lastError = err as ApiError;
-          if (!isNetworkApiError(lastError) || attempt === maxAttempts - 1) throw lastError;
-          await new Promise((r) => setTimeout(r, 600 * (attempt + 1)));
+      const requestId = clientRequestIdRef.current;
+      const hardTimeoutMs = 2500;
+      const abort = new AbortController();
+      const wallClock = new Promise<never>((_, reject) => {
+        window.setTimeout(() => {
+          abort.abort();
+          reject({ message: "Request timed out", status: 0 } satisfies ApiError);
+        }, hardTimeoutMs);
+      });
+
+      try {
+        const invoice = await Promise.race([
+          api<Invoice>("/invoices", {
+            method: "POST",
+            body,
+            timeoutMs: hardTimeoutMs,
+            signal: abort.signal,
+          }),
+          wallClock,
+        ]);
+        removeInvoiceSyncQueueItem(user.id, requestId);
+        queryClient.setQueryData(invoiceSyncQueueQueryKey(user.id), loadInvoiceSyncQueue(user.id));
+        return { mode: "created", invoice };
+      } catch (err) {
+        const error = err as ApiError;
+        if (isNetworkApiError(error)) {
+          return { mode: "queued" };
         }
+        // Real validation/business error — don't leave a fake pending row.
+        removeInvoiceSyncQueueItem(user.id, requestId);
+        queryClient.setQueryData(invoiceSyncQueueQueryKey(user.id), loadInvoiceSyncQueue(user.id));
+        throw error;
       }
-      throw lastError;
     },
-    onSuccess: () => {
+    onSuccess: (result) => {
+      if (result.mode === "queued") {
+        setCreateOpen(false);
+        resetCreateForm({ clearDraft: true });
+        toast({
+          title: "Saved offline — pending sync",
+          description: "It appears on Invoices as Pending sync and uploads when you’re back online.",
+        });
+        return;
+      }
       queryClient.invalidateQueries({ queryKey: ["invoices"] });
       queryClient.invalidateQueries({ queryKey: ["products"] });
       queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
@@ -641,17 +801,55 @@ const Invoices = () => {
       toast({ title: "Invoice created" });
     },
     onError: (error: ApiError) => {
-      if (isNetworkApiError(error)) {
-        toast({
-          title: "No network — draft saved",
-          description: "Your invoice is kept on this phone. Tap Create again when you’re online (won’t double).",
-          variant: "destructive",
-        });
-        return;
-      }
       toast({ title: "Error", description: error.message, variant: "destructive" });
     },
   });
+
+  const [syncNowBusy, setSyncNowBusy] = useState(false);
+
+  const handleSyncNow = async () => {
+    if (!user?.id) return;
+    setSyncNowBusy(true);
+    try {
+      const result = await syncInvoiceQueueNow(user.id);
+      queryClient.setQueryData(invoiceSyncQueueQueryKey(user.id), loadInvoiceSyncQueue(user.id));
+      if (result.synced > 0) {
+        refetchInvoices();
+        queryClient.invalidateQueries({ queryKey: ["products"] });
+        toast({
+          title: result.synced === 1 ? "Invoice synced" : `${result.synced} invoices synced`,
+        });
+      } else if (result.failed > 0) {
+        toast({
+          title: "Some invoices failed to sync",
+          description: "Check the Pending sync rows for details.",
+          variant: "destructive",
+        });
+      } else if (typeof navigator !== "undefined" && navigator.onLine === false) {
+        toast({
+          title: "Still offline",
+          description: "Pending invoices will sync when the network returns.",
+          variant: "destructive",
+        });
+      } else {
+        toast({ title: "Nothing to sync" });
+      }
+    } finally {
+      setSyncNowBusy(false);
+    }
+  };
+
+  const handleRetryLocalSync = async (inv: { client_request_id?: string }) => {
+    if (!user?.id || !inv.client_request_id) return;
+    await handleSyncNow();
+  };
+
+  const handleDiscardLocalSync = (inv: { client_request_id?: string }) => {
+    if (!user?.id || !inv.client_request_id) return;
+    removeInvoiceSyncQueueItem(user.id, inv.client_request_id);
+    queryClient.setQueryData(invoiceSyncQueueQueryKey(user.id), loadInvoiceSyncQueue(user.id));
+    toast({ title: "Removed from sync queue" });
+  };
 
   const suggestOrderMutation = useMutation({
     mutationFn: () => {
@@ -861,8 +1059,12 @@ const Invoices = () => {
           stats={[
             {
               label: "Listed",
-              value: isLoading ? "…" : invoices.length,
+              value: isLoading ? "…" : invoices.length + localPendingInvoices.length,
               accent: true,
+            },
+            {
+              label: "Pending sync",
+              value: String(localPendingInvoices.length),
             },
             {
               label: "Unpaid",
@@ -892,6 +1094,36 @@ const Invoices = () => {
             ) : undefined
           }
         />
+
+        {syncQueue.length > 0 && (
+          <Card className="border-amber-500/30 bg-amber-500/5 p-4">
+            <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+              <div className="flex items-start gap-3">
+                <div className="mt-0.5 flex h-10 w-10 shrink-0 items-center justify-center rounded-lg bg-amber-500/15 text-amber-800 dark:text-amber-200">
+                  <CloudOff className="h-5 w-5" />
+                </div>
+                <div>
+                  <p className="text-sm font-semibold text-foreground">
+                    {syncQueue.length} invoice{syncQueue.length === 1 ? "" : "s"} waiting to sync
+                  </p>
+                  <p className="text-xs text-muted-foreground">
+                    Saved on this device only. They upload automatically when you’re online. PDF/email
+                    unlock after sync.
+                  </p>
+                </div>
+              </div>
+              <Button
+                type="button"
+                className="h-11 w-full sm:w-auto"
+                disabled={syncNowBusy}
+                onClick={() => void handleSyncNow()}
+              >
+                <RefreshCw className={`mr-2 h-4 w-4 ${syncNowBusy ? "animate-spin" : ""}`} />
+                {syncNowBusy ? "Syncing…" : "Sync now"}
+              </Button>
+            </div>
+          </Card>
+        )}
 
         <Card className="border-primary/10 p-4">
           <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
@@ -974,8 +1206,16 @@ const Invoices = () => {
                   payment_status: inv.payment_status,
                   created_at: inv.created_at,
                   amount_paid: inv.amount_paid,
+                  local_sync: inv.local_sync,
+                  local_sync_error: inv.local_sync_error,
+                  client_request_id: inv.client_request_id,
                 }))}
                 onViewInvoice={(inv) => {
+                  if (inv.local_sync) {
+                    const local = localPendingInvoices.find((i) => i.id === inv.id);
+                    if (local) setViewInvoice(local);
+                    return;
+                  }
                   void (async () => {
                     try {
                       const full = await api<Invoice>(`/invoices/${inv.id}`);
@@ -990,22 +1230,52 @@ const Invoices = () => {
                   })();
                 }}
                 onRecordPayment={(inv) => {
+                  if (inv.local_sync) {
+                    toast({
+                      title: "Not synced yet",
+                      description: "Record payments after this invoice uploads.",
+                      variant: "destructive",
+                    });
+                    return;
+                  }
                   const row = invoices.find((i) => i.id === inv.id);
                   if (row) openPayment(row);
                 }}
                 onExportPDF={(inv) => {
+                  if (inv.local_sync) {
+                    toast({
+                      title: "PDF after sync",
+                      description: "Official PDF is available once the invoice is on the server.",
+                      variant: "destructive",
+                    });
+                    return;
+                  }
                   const row = invoices.find((i) => i.id === inv.id);
                   if (row) void exportPdf(row);
                 }}
                 onSendEmail={(inv) => {
+                  if (inv.local_sync) {
+                    toast({
+                      title: "Email after sync",
+                      description: "Email is available once the invoice is on the server.",
+                      variant: "destructive",
+                    });
+                    return;
+                  }
                   const row = invoices.find((i) => i.id === inv.id);
                   if (row) void emailInvoice(row);
                 }}
                 sendingEmailId={emailingId}
                 onDeleteInvoice={(inv) => {
+                  if (inv.local_sync) {
+                    handleDiscardLocalSync(inv);
+                    return;
+                  }
                   const row = invoices.find((i) => i.id === inv.id) || null;
                   setDeleteInvoice(row);
                 }}
+                onRetryLocalSync={(inv) => void handleRetryLocalSync(inv)}
+                onDiscardLocalSync={handleDiscardLocalSync}
                 onDistributePayment={(shopId, shopName, pendingInvs, totalPending) => {
                   const fullInvoices = pendingInvs
                     .map((p) => invoices.find((i) => i.id === p.id))
@@ -1507,7 +1777,7 @@ const Invoices = () => {
                   createMutation.mutate();
                 }}
               >
-                {createMutation.isPending ? "Creating..." : "Create Invoice"}
+                {createMutation.isPending ? "Saving…" : "Create Invoice"}
               </Button>
             </div>
           </div>
@@ -1614,10 +1884,29 @@ const Invoices = () => {
                     {new Date(viewInvoice.created_at).toLocaleString()}
                   </p>
                 </div>
-                <Badge variant={statusBadgeVariant(viewInvoice.payment_status)} className="capitalize">
-                  {viewInvoice.payment_status}
-                </Badge>
+                {viewInvoice.local_sync ? (
+                  <Badge
+                    variant={viewInvoice.local_sync === "failed" ? "destructive" : "secondary"}
+                    className="capitalize"
+                  >
+                    {viewInvoice.local_sync === "failed"
+                      ? "Sync failed"
+                      : viewInvoice.local_sync === "syncing"
+                        ? "Syncing…"
+                        : "Pending sync"}
+                  </Badge>
+                ) : (
+                  <Badge variant={statusBadgeVariant(viewInvoice.payment_status)} className="capitalize">
+                    {viewInvoice.payment_status}
+                  </Badge>
+                )}
               </div>
+              {viewInvoice.local_sync && (
+                <p className="rounded-lg bg-amber-500/10 px-3 py-2 text-xs text-amber-900 dark:text-amber-100">
+                  {viewInvoice.local_sync_error ||
+                    "Saved on this device only. It will upload when you’re online. PDF/email after sync."}
+                </p>
+              )}
               <div className="grid grid-cols-3 gap-3">
                 <div>
                   <p className="text-muted-foreground text-xs">Total</p>
@@ -1684,6 +1973,7 @@ const Invoices = () => {
               )}
               <div className="flex flex-wrap justify-end gap-2 pt-2">
                 {canCreate &&
+                  !viewInvoice.local_sync &&
                   Math.max(
                     0,
                     Number(viewInvoice.total_amount) - Number(viewInvoice.amount_paid || 0)
@@ -1710,6 +2000,27 @@ const Invoices = () => {
                       </Button>
                     </>
                   )}
+                {canCreate && viewInvoice.local_sync && (
+                  <>
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={() => {
+                        handleDiscardLocalSync(viewInvoice);
+                        setViewInvoice(null);
+                      }}
+                    >
+                      Remove
+                    </Button>
+                    <Button
+                      size="sm"
+                      disabled={syncNowBusy || viewInvoice.local_sync === "syncing"}
+                      onClick={() => void handleRetryLocalSync(viewInvoice)}
+                    >
+                      Sync now
+                    </Button>
+                  </>
+                )}
               </div>
             </div>
           )}
