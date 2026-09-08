@@ -31,7 +31,7 @@ import { Navigate } from "react-router-dom";
 import { cn } from "@/lib/utils";
 import { DollarSign, FileText, TrendingUp, Users } from "lucide-react";
 
-type Period = "today" | "week" | "month" | "custom";
+type Period = "all" | "today" | "week" | "month" | "custom";
 
 type SalesPersonRow = {
   user_id: string;
@@ -51,6 +51,8 @@ function rangeForPeriod(
 ): { from: Date; to: Date } | null {
   const now = new Date();
   switch (period) {
+    case "all":
+      return { from: new Date("2020-01-01T00:00:00"), to: endOfDay(now) };
     case "today":
       return { from: startOfDay(now), to: endOfDay(now) };
     case "week":
@@ -71,6 +73,7 @@ function rangeForPeriod(
 }
 
 const PERIODS: { id: Period; label: string }[] = [
+  { id: "all", label: "All time" },
   { id: "today", label: "Today" },
   { id: "week", label: "This week" },
   { id: "month", label: "This month" },
@@ -79,7 +82,7 @@ const PERIODS: { id: Period; label: string }[] = [
 
 const SalesPerformance = () => {
   const { user } = useAuth();
-  const [period, setPeriod] = useState<Period>("month");
+  const [period, setPeriod] = useState<Period>("all");
   const [commissionRate, setCommissionRate] = useState("10");
   const [customFrom, setCustomFrom] = useState("");
   const [customTo, setCustomTo] = useState("");
@@ -127,7 +130,9 @@ const SalesPerformance = () => {
         title="Sales Performance"
         description={
           range
-            ? `${format(range.from, "MMM d, yyyy")} – ${format(range.to, "MMM d, yyyy")} · ${rate}% commission`
+            ? period === "all"
+              ? `All time · ${rate}% commission`
+              : `${format(range.from, "MMM d, yyyy")} – ${format(range.to, "MMM d, yyyy")} · ${rate}% commission`
             : "Pick a period to rank salesperson revenue and commission"
         }
         stats={[
