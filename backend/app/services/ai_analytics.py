@@ -73,7 +73,7 @@ def resolve_period(
         return start, end, f"{start.isoformat()}_to_{end.isoformat()}"
 
     if days_back is not None:
-        days = max(0, min(365, int(days_back)))
+        days = max(0, min(730, int(days_back)))
         return today - timedelta(days=days), today, f"last_{days}_days"
 
     if preset_key in ("today",):
@@ -88,14 +88,21 @@ def resolve_period(
         end = today - timedelta(days=today.weekday() + 1)
         start = end - timedelta(days=6)
         return start, end, "last_week"
-    if preset_key in ("this_month", "month", ""):
+    if preset_key in ("this_month", "month"):
         return today.replace(day=1), today, "this_month"
     if preset_key in ("last_month",):
         first_this = today.replace(day=1)
         end = first_this - timedelta(days=1)
         return end.replace(day=1), end, "last_month"
+    if preset_key in ("ytd", "year_to_date", "this_year"):
+        return today.replace(month=1, day=1), today, "ytd"
+    if preset_key in ("last_90_days", "last_90"):
+        return today - timedelta(days=90), today, "last_90_days"
+    # Default / all history: vague asks should see full migrated dataset, not just this month
+    if preset_key in ("", "all_time", "all", "everything", "lifetime", "all_history"):
+        return date(2020, 1, 1), today, "all_time"
 
-    return today.replace(day=1), today, "this_month"
+    return date(2020, 1, 1), today, "all_time"
 
 
 def prior_period(start: date, end: date) -> tuple[date, date]:
@@ -217,7 +224,7 @@ def tool_sales_by_day(
     db: Session,
     user: User,
     *,
-    preset: str | None = "this_month",
+    preset: str | None = "last_90_days",
     date_from: str | None = None,
     date_to: str | None = None,
 ) -> dict:
@@ -283,7 +290,7 @@ def tool_payments_summary(
     days_back: int | None = None,
 ) -> dict:
     start, end, label = resolve_period(
-        preset=preset or "today",
+        preset=preset or "all_time",
         date_from=date_from,
         date_to=date_to,
         days_back=days_back,
@@ -362,7 +369,7 @@ def tool_sales_by_area(
     db: Session,
     user: User,
     *,
-    preset: str | None = "this_month",
+    preset: str | None = "all_time",
     date_from: str | None = None,
     date_to: str | None = None,
     sort_by: str = "total_sales",
@@ -433,7 +440,7 @@ def tool_compare_areas(
     *,
     area_a: str,
     area_b: str,
-    preset: str | None = "this_month",
+    preset: str | None = "all_time",
     date_from: str | None = None,
     date_to: str | None = None,
 ) -> dict:
@@ -481,7 +488,7 @@ def tool_shop_insights(
     user: User,
     *,
     shop_name: str,
-    preset: str | None = "this_month",
+    preset: str | None = "all_time",
     date_from: str | None = None,
     date_to: str | None = None,
     history_limit: int = 10,
@@ -564,7 +571,7 @@ def tool_customer_rankings(
     db: Session,
     user: User,
     *,
-    preset: str | None = "this_month",
+    preset: str | None = "all_time",
     date_from: str | None = None,
     date_to: str | None = None,
     mode: str = "top",
@@ -648,7 +655,7 @@ def tool_product_sales(
     db: Session,
     user: User,
     *,
-    preset: str | None = "this_month",
+    preset: str | None = "all_time",
     date_from: str | None = None,
     date_to: str | None = None,
     sort_by: str = "quantity",
@@ -786,7 +793,7 @@ def tool_rep_performance(
     db: Session,
     user: User,
     *,
-    preset: str | None = "this_month",
+    preset: str | None = "all_time",
     date_from: str | None = None,
     date_to: str | None = None,
     salesperson_name: str | None = None,

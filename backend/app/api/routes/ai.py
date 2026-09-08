@@ -328,14 +328,14 @@ def _tool_invoices_by_date(
     end_day = _parse_ymd(date_to)
 
     if days_back is not None and start_day is None and end_day is None:
-        days = max(0, min(365, int(days_back)))
+        days = max(0, min(730, int(days_back)))
         end_day = today
         start_day = today - timedelta(days=days)
 
     if start_day is None and end_day is None:
-        # Default: yesterday (most common chat ask when date tools are used loosely)
-        start_day = today - timedelta(days=1)
-        end_day = start_day
+        # Default: last 90 days (migrated history is sparse day-to-day)
+        start_day = today - timedelta(days=90)
+        end_day = today
     elif start_day is None:
         start_day = end_day
     elif end_day is None:
@@ -580,7 +580,7 @@ CHAT_TOOLS = [
             "name": "invoices_by_date",
             "description": (
                 "List individual invoices in a calendar date range (America/Chicago). "
-                "Use when the user wants an invoice list for yesterday/today/a date range. "
+                "Default last 90 days when no dates given. "
                 "For totals/AOV use sales_summary instead."
             ),
             "parameters": {
@@ -598,7 +598,7 @@ CHAT_TOOLS = [
                         "type": "integer",
                         "description": "Alternative to dates: include invoices from the last N days through today.",
                         "minimum": 0,
-                        "maximum": 365,
+                        "maximum": 730,
                     },
                     "payment_status": {
                         "type": "string",
@@ -615,7 +615,8 @@ CHAT_TOOLS = [
             "name": "sales_summary",
             "description": (
                 "Sales totals for a period: invoice_count, total_sales, average_order_value, "
-                "payment_status breakdown. Use for total sales today/yesterday/week/month and AOV."
+                "payment_status breakdown. Default all_time when no period given. "
+                "Use today/yesterday/this_month only when the user asks for that window."
             ),
             "parameters": {
                 "type": "object",
@@ -623,6 +624,9 @@ CHAT_TOOLS = [
                     "preset": {
                         "type": "string",
                         "enum": [
+                            "all_time",
+                            "ytd",
+                            "last_90_days",
                             "today",
                             "yesterday",
                             "this_week",
@@ -633,7 +637,7 @@ CHAT_TOOLS = [
                     },
                     "date_from": {"type": "string"},
                     "date_to": {"type": "string"},
-                    "days_back": {"type": "integer", "minimum": 0, "maximum": 365},
+                    "days_back": {"type": "integer", "minimum": 0, "maximum": 730},
                 },
             },
         },
@@ -664,15 +668,23 @@ CHAT_TOOLS = [
         "function": {
             "name": "sales_by_day",
             "description": (
-                "Daily sales breakdown for a month/range with best_day and worst_day. "
-                "Use for best/lowest sales day this month."
+                "Daily sales breakdown for a range with best_day and worst_day. "
+                "Default last_90_days. Use this_month when asked for this month only."
             ),
             "parameters": {
                 "type": "object",
                 "properties": {
                     "preset": {
                         "type": "string",
-                        "enum": ["this_month", "last_month", "this_week", "last_week"],
+                        "enum": [
+                            "last_90_days",
+                            "all_time",
+                            "ytd",
+                            "this_month",
+                            "last_month",
+                            "this_week",
+                            "last_week",
+                        ],
                     },
                     "date_from": {"type": "string"},
                     "date_to": {"type": "string"},
@@ -686,7 +698,7 @@ CHAT_TOOLS = [
             "name": "payments_summary",
             "description": (
                 "Collections in a period (by payment_date) plus current outstanding balance, "
-                "unpaid and partial invoice counts. Use for collected today/week and how much outstanding."
+                "unpaid and partial invoice counts. Default all_time for collections when unspecified."
             ),
             "parameters": {
                 "type": "object",
@@ -694,6 +706,9 @@ CHAT_TOOLS = [
                     "preset": {
                         "type": "string",
                         "enum": [
+                            "all_time",
+                            "ytd",
+                            "last_90_days",
                             "today",
                             "yesterday",
                             "this_week",
@@ -704,7 +719,7 @@ CHAT_TOOLS = [
                     },
                     "date_from": {"type": "string"},
                     "date_to": {"type": "string"},
-                    "days_back": {"type": "integer", "minimum": 0, "maximum": 365},
+                    "days_back": {"type": "integer", "minimum": 0, "maximum": 730},
                 },
             },
         },
@@ -960,7 +975,7 @@ def _run_tool(name: str, args: dict, db: Session, user: User) -> str:
         data = analytics.tool_sales_by_day(
             db,
             user,
-            preset=args.get("preset") or "this_month",
+            preset=args.get("preset") or "last_90_days",
             date_from=args.get("date_from"),
             date_to=args.get("date_to"),
         )
@@ -979,7 +994,7 @@ def _run_tool(name: str, args: dict, db: Session, user: User) -> str:
         data = analytics.tool_sales_by_area(
             db,
             user,
-            preset=args.get("preset") or "this_month",
+            preset=args.get("preset") or "all_time",
             date_from=args.get("date_from"),
             date_to=args.get("date_to"),
             sort_by=args.get("sort_by") or "total_sales",
@@ -994,7 +1009,7 @@ def _run_tool(name: str, args: dict, db: Session, user: User) -> str:
             user,
             area_a=str(args.get("area_a") or ""),
             area_b=str(args.get("area_b") or ""),
-            preset=args.get("preset") or "this_month",
+            preset=args.get("preset") or "all_time",
             date_from=args.get("date_from"),
             date_to=args.get("date_to"),
         )
@@ -1003,7 +1018,7 @@ def _run_tool(name: str, args: dict, db: Session, user: User) -> str:
             db,
             user,
             shop_name=str(args.get("shop_name") or ""),
-            preset=args.get("preset") or "this_month",
+            preset=args.get("preset") or "all_time",
             date_from=args.get("date_from"),
             date_to=args.get("date_to"),
             history_limit=int(args.get("history_limit") or 10),
@@ -1012,7 +1027,7 @@ def _run_tool(name: str, args: dict, db: Session, user: User) -> str:
         data = analytics.tool_customer_rankings(
             db,
             user,
-            preset=args.get("preset") or "this_month",
+            preset=args.get("preset") or "all_time",
             date_from=args.get("date_from"),
             date_to=args.get("date_to"),
             mode=str(args.get("mode") or "top"),
@@ -1037,7 +1052,7 @@ def _run_tool(name: str, args: dict, db: Session, user: User) -> str:
         data = analytics.tool_product_sales(
             db,
             user,
-            preset=args.get("preset") or "this_month",
+            preset=args.get("preset") or "all_time",
             date_from=args.get("date_from"),
             date_to=args.get("date_to"),
             sort_by=args.get("sort_by") or "quantity",
@@ -1053,7 +1068,7 @@ def _run_tool(name: str, args: dict, db: Session, user: User) -> str:
         data = analytics.tool_rep_performance(
             db,
             user,
-            preset=args.get("preset") or "this_month",
+            preset=args.get("preset") or "all_time",
             date_from=args.get("date_from"),
             date_to=args.get("date_to"),
             salesperson_name=args.get("salesperson_name"),
@@ -1090,6 +1105,10 @@ def ai_chat(
                 "If tools return empty/note, say so clearly. "
                 f"Business timezone is America/Chicago. Today is {today}. "
                 "Area means shop city. Salesperson means invoice created_by user. "
+                "Period defaults: when the user does not name a date range, use all_time "
+                "(full history including migrated invoices). Use today/yesterday/this_month/"
+                "last_month/ytd only when they ask for that. For MoM compare use this_month vs last_month. "
+                "Always state the period you used in the answer. "
                 "Tool routing: "
                 "sales totals/AOV → sales_summary; MoM/trend compare → sales_compare; "
                 "best/worst day → sales_by_day; invoice line list for a date → invoices_by_date; "
