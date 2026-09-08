@@ -48,12 +48,10 @@ import {
 } from "@/components/ui/command";
 import { useAuth } from "@/lib/auth";
 import { api, ApiError } from "@/lib/api";
-import {
-  buildPageParams,
-  DEFAULT_PAGE_SIZE,
-  fetchAllPages,
-  type Paginated,
-} from "@/lib/pagination";
+import { fetchAllPages } from "@/lib/pagination";
+
+/** How many shop groups to show per page (each group includes ALL that shop's invoices). */
+const SHOP_GROUPS_PER_PAGE = 25;
 import { ListPaginationBar } from "@/components/ui/ListPaginationBar";
 import {
   clearInvoiceCreateDraft,
@@ -239,7 +237,6 @@ const Invoices = () => {
   const [shopFilter, setShopFilter] = useState("all");
   const [shopFilterLabel, setShopFilterLabel] = useState<string | null>(null);
   const [page, setPage] = useState(1);
-  const pageSize = DEFAULT_PAGE_SIZE;
 
   useEffect(() => {
     const timer = window.setTimeout(() => setDebouncedSearch(search.trim()), 300);
@@ -291,43 +288,43 @@ const Invoices = () => {
     totalPending: number;
   } | null>(null);
 
-  const invoiceQueryParams = useMemo(
-    () =>
-      buildPageParams({
-        search: debouncedSearch || undefined,
-        payment_status: statusFilter !== "all" ? statusFilter : undefined,
-        shop_id: shopFilter !== "all" ? shopFilter : undefined,
-        page,
-        page_size: pageSize,
-      }),
-    [debouncedSearch, statusFilter, shopFilter, page, pageSize]
+  const invoiceListFilters = useMemo(
+    () => ({
+      search: debouncedSearch || undefined,
+      payment_status: statusFilter !== "all" ? statusFilter : undefined,
+      shop_id: shopFilter !== "all" ? shopFilter : undefined,
+    }),
+    [debouncedSearch, statusFilter, shopFilter]
   );
 
   const {
-    data: invoicePage,
+    data: invoices = [],
     isLoading,
     isError: invoicesError,
     error: invoicesErrorObj,
     refetch: refetchInvoicePage,
     isFetching: invoicesFetching,
   } = useQuery({
-    queryKey: ["invoices", invoiceQueryParams],
+    queryKey: ["invoices", "all-for-shops", invoiceListFilters],
     queryFn: async () => {
       try {
-        return await api<Paginated<Invoice>>(`/invoices${invoiceQueryParams}`, {
-          timeoutMs: 20_000,
+        // Load every matching invoice so each shop group has its full history
+        // (not just whatever fits in a global page of 50).
+        return await fetchAllPages<Invoice>("/invoices", {
+          pageSize: 200,
+          extraParams: invoiceListFilters,
+          timeoutMs: 30_000,
         });
       } catch (err) {
         if (isNetworkApiError(err as ApiError)) {
-          return { items: [] as Invoice[], total: 0, page, page_size: pageSize };
+          return [] as Invoice[];
         }
         throw err;
       }
     },
   });
 
-  const invoices = invoicePage?.items ?? [];
-  const invoiceTotal = invoicePage?.total ?? 0;
+  const invoiceTotal = invoices.length;
 
   useInvoiceSyncQueue(user?.id);
   const { data: syncQueue = [] } = useQuery({
@@ -499,6 +496,20 @@ const Invoices = () => {
       }))
       .sort((a, b) => b.pending - a.pending || a.shopName.localeCompare(b.shopName));
   }, [invoices, localPendingInvoices, shopFilter, statusFilter, debouncedSearch]);
+
+  const pagedShopGroups = useMemo(() => {
+    const start = (page - 1) * SHOP_GROUPS_PER_PAGE;
+    return shopGroups.slice(start, start + SHOP_GROUPS_PER_PAGE);
+  }, [shopGroups, page]);
+
+  const openBalanceTotal = useMemo(
+    () =>
+      invoices.reduce(
+        (sum, i) => sum + Math.max(0, Number(i.total_amount) - Number(i.amount_paid || 0)),
+        0
+      ),
+    [invoices]
+  );
 
   const refetchInvoices = () => {
     queryClient.invalidateQueries({ queryKey: ["invoices"] });
@@ -1270,20 +1281,12 @@ const Invoices = () => {
               value: String(localPendingInvoices.length),
             },
             {
-              label: "On page",
-              value: isLoading ? "…" : invoices.length,
+              label: "Shops",
+              value: isLoading ? "…" : shopGroups.length,
             },
             {
               label: "Open $",
-              value: isLoading
-                ? "…"
-                : `$${invoices
-                    .reduce(
-                      (sum, i) =>
-                        sum + Math.max(0, Number(i.total_amount) - Number(i.amount_paid || 0)),
-                      0
-                    )
-                    .toFixed(0)}`,
+              value: isLoading ? "…" : `$${openBalanceTotal.toFixed(0)}`,
             },
           ]}
           action={
@@ -1408,7 +1411,7 @@ const Invoices = () => {
               }
             />
           ) : (
-            shopGroups.map((group) => (
+            pagedShopGroups.map((group) => (
               <ShopInvoiceGroup
                 key={group.shopId}
                 shopId={group.shopId}
@@ -1517,9 +1520,10 @@ const Invoices = () => {
           )}
           <ListPaginationBar
             page={page}
-            pageSize={pageSize}
-            total={invoiceTotal}
+            pageSize={SHOP_GROUPS_PER_PAGE}
+            total={shopGroups.length}
             onPageChange={setPage}
+            itemLabel="shops"
             className="pt-2"
           />
         </div>
