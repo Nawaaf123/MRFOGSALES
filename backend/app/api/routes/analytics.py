@@ -3,7 +3,7 @@ from uuid import UUID
 
 from fastapi import APIRouter, Depends, Query
 from sqlalchemy import case, func
-from sqlalchemy.orm import Session, joinedload
+from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, require_roles
 from app.db.session import get_db
@@ -16,7 +16,6 @@ from app.models import (
     Product,
     Shop,
     User,
-    UserRole,
 )
 from app.schemas import (
     AnalyticsOverview,
@@ -510,48 +509,46 @@ def sales_performance(
     db: Session = Depends(get_db),
     _: User = Depends(require_roles(AppRole.admin)),
 ) -> list[SalesPersonPerformance]:
-    sales_users = (
-        db.query(User)
-        .options(joinedload(User.role))
-        .join(UserRole, UserRole.user_id == User.id)
-        .filter(UserRole.role == AppRole.sales, User.is_active.is_(True))
-        .all()
-    )
+    """Rank anyone who created invoices in the period (sales, srour, admin, etc.).
 
-    results: list[SalesPersonPerformance] = []
-    for sales_user in sales_users:
-        q = (
-            db.query(Invoice)
-            .join(Shop, Invoice.shop_id == Shop.id)
-            .filter(
-                Shop.is_frozen.is_(False),
-                Invoice.created_by == sales_user.id,
-            )
-        )
-        if date_from:
-            q = q.filter(Invoice.created_at >= date_from)
-        if date_to:
-            q = q.filter(Invoice.created_at <= date_to)
-
-        stats = q.with_entities(
+    Previously only active `sales` role users were listed, which hid migrated
+    history for srour/admin creators.
+    """
+    q = (
+        db.query(
+            User.id,
+            User.full_name,
+            User.email,
             func.count(Invoice.id),
             func.coalesce(func.sum(Invoice.total_amount), 0),
             func.count(func.distinct(Invoice.shop_id)),
-        ).one()
+        )
+        .join(Invoice, Invoice.created_by == User.id)
+        .join(Shop, Invoice.shop_id == Shop.id)
+        .filter(Shop.is_frozen.is_(False))
+    )
+    if date_from:
+        q = q.filter(Invoice.created_at >= date_from)
+    if date_to:
+        q = q.filter(Invoice.created_at <= date_to)
 
-        invoice_count = int(stats[0] or 0)
-        revenue = float(stats[1] or 0)
-        shops = int(stats[2] or 0)
+    rows = q.group_by(User.id, User.full_name, User.email).all()
+
+    results: list[SalesPersonPerformance] = []
+    for user_id, full_name, email, invoice_count, revenue, shops in rows:
+        count = int(invoice_count or 0)
+        rev = float(revenue or 0)
+        shop_count = int(shops or 0)
         results.append(
             SalesPersonPerformance(
-                user_id=sales_user.id,
-                full_name=sales_user.full_name,
-                email=sales_user.email,
-                invoice_count=invoice_count,
-                total_revenue=revenue,
-                unique_shops=shops,
-                average_invoice=(revenue / invoice_count) if invoice_count else 0,
-                commission=revenue * (commission_rate / 100),
+                user_id=user_id,
+                full_name=full_name,
+                email=email,
+                invoice_count=count,
+                total_revenue=rev,
+                unique_shops=shop_count,
+                average_invoice=(rev / count) if count else 0,
+                commission=rev * (commission_rate / 100),
             )
         )
 
