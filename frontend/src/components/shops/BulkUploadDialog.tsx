@@ -5,7 +5,6 @@ import { Upload, Download, AlertCircle, CheckCircle2, FileSpreadsheet } from "lu
 import { Input } from "@/components/ui/input";
 import { api, ApiError } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
-import * as XLSX from "xlsx";
 
 interface BulkUploadDialogProps {
   open: boolean;
@@ -56,7 +55,8 @@ export const BulkUploadDialog = ({ open, onOpenChange, onSuccess }: BulkUploadDi
   );
   const { toast } = useToast();
 
-  const downloadTemplate = () => {
+  const downloadTemplate = async () => {
+    const XLSX = await import("xlsx");
     const ws = XLSX.utils.json_to_sheet([
       {
         "Shop Name": "Example Shop",
@@ -87,6 +87,7 @@ export const BulkUploadDialog = ({ open, onOpenChange, onSuccess }: BulkUploadDi
   };
 
   const parseFile = async (fileToParse: File): Promise<ShopCreateRow[]> => {
+    const XLSX = await import("xlsx");
     const data = await fileToParse.arrayBuffer();
     const workbook = XLSX.read(data);
     const worksheet = workbook.Sheets[workbook.SheetNames[0]];

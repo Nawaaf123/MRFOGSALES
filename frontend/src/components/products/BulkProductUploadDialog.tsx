@@ -12,7 +12,6 @@ import { Input } from "@/components/ui/input";
 import { Upload, Download, FileSpreadsheet } from "lucide-react";
 import { api, ApiError } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
-import * as XLSX from "xlsx";
 
 type ProductCreateRow = {
   name: string;
@@ -51,7 +50,8 @@ export const BulkProductUploadDialog = ({
   const { toast } = useToast();
   const queryClient = useQueryClient();
 
-  const downloadTemplate = () => {
+  const downloadTemplate = async () => {
+    const XLSX = await import("xlsx");
     const ws = XLSX.utils.json_to_sheet([
       {
         "Product Name": "Example Product",
@@ -118,8 +118,9 @@ export const BulkProductUploadDialog = ({
     if (!file) return;
 
     const reader = new FileReader();
-    reader.onload = (e) => {
+    reader.onload = async (e) => {
       try {
+        const XLSX = await import("xlsx");
         const data = new Uint8Array(e.target?.result as ArrayBuffer);
         const workbook = XLSX.read(data, { type: "array" });
         const worksheet = workbook.Sheets[workbook.SheetNames[0]];

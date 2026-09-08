@@ -30,6 +30,7 @@ services:
       MAPBOX_ACCESS_TOKEN: ${MAPBOX_ACCESS_TOKEN:-}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-}
       OPENAI_MODEL: ${OPENAI_MODEL:-gpt-4o-mini}
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
     depends_on:
       db:
         condition: service_healthy

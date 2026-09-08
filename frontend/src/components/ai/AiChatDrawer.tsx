@@ -21,7 +21,8 @@ export function AiChatDrawer() {
   const [messages, setMessages] = useState<ChatMsg[]>([
     {
       role: "assistant",
-      content: "Ask about unpaid shops, recent invoices, low stock, or top products.",
+      content:
+        "Ask things like: total sales yesterday, compare this month vs last, bottom areas by sales, outstanding balance, quiet shops, or which areas to focus on.",
     },
   ]);
 
@@ -109,7 +110,7 @@ export function AiChatDrawer() {
             <Input
               value={input}
               onChange={(e) => setInput(e.target.value)}
-              placeholder="e.g. Which shops have unpaid balances?"
+              placeholder="e.g. What were total sales yesterday?"
               className="h-11"
               onKeyDown={(e) => {
                 if (e.key === "Enter") {

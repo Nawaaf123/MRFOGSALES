@@ -16,7 +16,6 @@ type PendingInvoice = {
 
 export const PendingPayments = () => {
   const { user } = useAuth();
-  const isAdmin = user?.role === "admin";
 
   const { data: pendingInvoices, isLoading } = useQuery({
     queryKey: ["pending-payments"],
@@ -42,7 +41,7 @@ export const PendingPayments = () => {
             <span className="flex h-8 w-8 items-center justify-center rounded-lg bg-primary/10 text-primary">
               <AlertCircle className="h-4 w-4" />
             </span>
-            {isAdmin ? "Pending payments" : "My pending payments"}
+            Pending payments
           </CardTitle>
           <Badge className="bg-primary/15 text-primary hover:bg-primary/15">
             ${totalPending.toFixed(2)}

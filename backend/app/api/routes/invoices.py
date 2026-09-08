@@ -1,5 +1,6 @@
 from datetime import date, datetime, timezone
 from uuid import UUID
+from zoneinfo import ZoneInfo
 
 from fastapi import APIRouter, Depends, HTTPException, Query, status
 from sqlalchemy import case, func, or_, text
@@ -18,6 +19,7 @@ from app.models import (
     Product,
     Shop,
     User,
+    WarehouseCode,
 )
 from app.schemas import (
     DistributePaymentRequest,
@@ -27,6 +29,7 @@ from app.schemas import (
     InvoiceListOut,
     InvoiceListPage,
     InvoiceOut,
+    InvoiceUpdate,
     LegacyBalanceCreate,
     PaymentCreate,
     PaymentOut,
@@ -37,6 +40,34 @@ router = APIRouter(tags=["invoices"])
 
 # Postgres advisory lock key — serializes invoice number allocation across requests
 _INVOICE_NUMBER_LOCK = 872_364_101
+_BUSINESS_TZ = ZoneInfo("America/Chicago")
+_STAFF_ROLES = (AppRole.admin, AppRole.sales, AppRole.srour)
+
+
+def _user_role(user: User) -> AppRole:
+    return user.role.role if user.role else AppRole.sales
+
+
+def is_same_business_day(created_at: datetime) -> bool:
+    dt = created_at if created_at.tzinfo else created_at.replace(tzinfo=timezone.utc)
+    now = datetime.now(_BUSINESS_TZ)
+    return dt.astimezone(_BUSINESS_TZ).date() == now.date()
+
+
+def adjust_stock(product: Product, warehouse: str, qty: int, *, restore: bool = False) -> None:
+    delta = -qty if not restore else qty
+    if warehouse == "B":
+        product.stock_quantity_b = max(int(product.stock_quantity_b or 0) + delta, 0)
+    else:
+        product.stock_quantity = max(int(product.stock_quantity or 0) + delta, 0)
+
+
+def resolve_create_warehouse(user: User, requested: WarehouseCode | None) -> WarehouseCode:
+    """Admin may pick A/B; sales/srour always use their assigned warehouse."""
+    role = _user_role(user)
+    if role == AppRole.admin:
+        return requested or WarehouseCode.A
+    return user.assigned_warehouse or WarehouseCode.A
 
 
 def next_invoice_number(db: Session) -> str:
@@ -153,7 +184,7 @@ def list_invoices(
     date_from: datetime | None = Query(default=None),
     date_to: datetime | None = Query(default=None),
     page: int = Query(default=1, ge=1),
-    page_size: int = Query(default=50, ge=1, le=200),
+    page_size: int = Query(default=50, ge=1, le=500),
     db: Session = Depends(get_db),
     current_user: User = Depends(get_current_user),
 ) -> InvoiceListPage:
@@ -163,8 +194,8 @@ def list_invoices(
         .join(Shop, Invoice.shop_id == Shop.id)
         .filter(Shop.is_frozen.is_(False))
     )
-    role = current_user.role.role if current_user.role else AppRole.sales
-    if role not in (AppRole.admin, AppRole.srour):
+    role = _user_role(current_user)
+    if role not in _STAFF_ROLES:
         query = query.filter(Invoice.created_by == current_user.id)
 
     if payment_status:
@@ -245,7 +276,7 @@ def create_invoice(
                 total_amount=total_amount,
                 discount_amount=payload.discount_amount,
                 notes=payload.notes,
-                warehouse=payload.warehouse,
+                warehouse=resolve_create_warehouse(current_user, payload.warehouse),
                 payment_status=PaymentStatus.unpaid,
             )
             db.add(invoice)
@@ -263,7 +294,7 @@ def create_invoice(
             if missing:
                 raise HTTPException(status_code=404, detail=f"Product not found: {missing[0]}")
 
-            warehouse = payload.warehouse.value if payload.warehouse else "A"
+            warehouse = (invoice.warehouse.value if invoice.warehouse else "A")
             for item in payload.items:
                 product = product_map[item.product_id]
                 db.add(
@@ -276,10 +307,7 @@ def create_invoice(
                         subtotal=item.subtotal,
                     )
                 )
-                if warehouse == "B":
-                    product.stock_quantity_b = max(int(product.stock_quantity_b) - item.quantity, 0)
-                else:
-                    product.stock_quantity = max(int(product.stock_quantity) - item.quantity, 0)
+                adjust_stock(product, warehouse, item.quantity, restore=False)
 
             for payment_in in payload.payments:
                 db.add(
@@ -332,17 +360,94 @@ def get_invoice(
     invoice = load_invoice(db, invoice_id)
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found")
-    role = current_user.role.role if current_user.role else AppRole.sales
-    if role not in (AppRole.admin, AppRole.srour) and invoice.created_by != current_user.id:
+    role = _user_role(current_user)
+    if role not in _STAFF_ROLES and invoice.created_by != current_user.id:
         raise HTTPException(status_code=403, detail="Forbidden")
     return serialize_invoice(invoice, db)
+
+
+@router.patch("/invoices/{invoice_id}", response_model=InvoiceOut)
+def update_invoice(
+    invoice_id: UUID,
+    payload: InvoiceUpdate,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(AppRole.admin, AppRole.sales, AppRole.srour)),
+) -> InvoiceOut:
+    invoice = load_invoice(db, invoice_id)
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+
+    role = _user_role(current_user)
+    if role != AppRole.admin and not is_same_business_day(invoice.created_at):
+        raise HTTPException(
+            status_code=403,
+            detail="Only invoices created today can be edited",
+        )
+    if not payload.items:
+        raise HTTPException(status_code=400, detail="Invoice requires at least one item")
+
+    warehouse = invoice.warehouse.value if invoice.warehouse else "A"
+    old_product_ids = [item.product_id for item in (invoice.items or []) if item.product_id]
+    new_product_ids = [item.product_id for item in payload.items]
+    all_ids = list({*old_product_ids, *new_product_ids})
+    products = (
+        db.query(Product).filter(Product.id.in_(all_ids)).with_for_update().all() if all_ids else []
+    )
+    product_map = {p.id: p for p in products}
+    for pid in new_product_ids:
+        if pid not in product_map:
+            raise HTTPException(status_code=404, detail=f"Product not found: {pid}")
+
+    # Restore stock from previous lines, then apply new lines.
+    for old in list(invoice.items or []):
+        if old.product_id and old.product_id in product_map:
+            adjust_stock(product_map[old.product_id], warehouse, int(old.quantity), restore=True)
+        db.delete(old)
+    db.flush()
+
+    items_total = sum(item.subtotal for item in payload.items)
+    invoice.discount_amount = payload.discount_amount
+    invoice.notes = payload.notes
+    invoice.total_amount = max(items_total - payload.discount_amount, 0)
+
+    for item in payload.items:
+        product = product_map[item.product_id]
+        db.add(
+            InvoiceItem(
+                invoice_id=invoice.id,
+                product_id=item.product_id,
+                product_name=item.product_name,
+                quantity=item.quantity,
+                unit_price=item.unit_price,
+                subtotal=item.subtotal,
+            )
+        )
+        adjust_stock(product, warehouse, item.quantity, restore=False)
+
+    db.flush()
+    paid = float(
+        db.query(func.coalesce(func.sum(Payment.amount), 0))
+        .filter(Payment.invoice_id == invoice.id)
+        .scalar()
+        or 0
+    )
+    if paid > float(invoice.total_amount) + 0.01:
+        raise HTTPException(
+            status_code=400,
+            detail="New total is less than payments already recorded on this invoice",
+        )
+    refresh_payment_status(db, invoice)
+    db.commit()
+    loaded = load_invoice(db, invoice.id)
+    assert loaded is not None
+    return serialize_invoice(loaded, db)
 
 
 @router.delete("/invoices/{invoice_id}", status_code=status.HTTP_204_NO_CONTENT)
 def delete_invoice(
     invoice_id: UUID,
     db: Session = Depends(get_db),
-    _: User = Depends(require_roles(AppRole.admin)),
+    _: User = Depends(require_roles(AppRole.admin, AppRole.srour)),
 ) -> None:
     invoice = load_invoice(db, invoice_id)
     if not invoice:
@@ -401,8 +506,8 @@ def email_invoice(
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found")
 
-    role = current_user.role.role if current_user.role else AppRole.sales
-    if role not in (AppRole.admin, AppRole.srour) and invoice.created_by != current_user.id:
+    role = _user_role(current_user)
+    if role not in _STAFF_ROLES and invoice.created_by != current_user.id:
         raise HTTPException(status_code=403, detail="Forbidden")
 
     to_email = payload.to or (invoice.shop.email if invoice.shop else None)

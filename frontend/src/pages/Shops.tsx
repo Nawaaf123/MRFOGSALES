@@ -1,4 +1,4 @@
-import { useEffect, useMemo, useState, lazy, Suspense } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -31,10 +31,10 @@ import { BulkUploadDialog } from "@/components/shops/BulkUploadDialog";
 import { PageHero } from "@/components/ui/PageHero";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { FilterChips } from "@/components/ui/FilterChips";
+import { DeferredLocationsMap } from "@/components/location/DeferredLocationsMap";
 import { cn } from "@/lib/utils";
 import {
   Edit,
-  Loader2,
   Mail,
   MapPin,
   Phone,
@@ -44,10 +44,6 @@ import {
   Sun,
   Upload,
 } from "lucide-react";
-
-const LocationsMap = lazy(() =>
-  import("@/components/location/SalesMap").then((m) => ({ default: m.LocationsMap }))
-);
 
 type Shop = {
   id: string;
@@ -127,8 +123,9 @@ const Shops = () => {
   const { user } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
-  const canManage = user?.role === "admin" || user?.role === "sales";
+  const canManage = user?.role === "admin" || user?.role === "sales" || user?.role === "srour";
   const isAdmin = user?.role === "admin";
+  const canBulkImport = isAdmin;
 
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
@@ -297,14 +294,16 @@ const Shops = () => {
                     {geocodeMutation.isPending ? "Geocoding..." : "Geocode"}
                   </Button>
                 )}
-                <Button
-                  variant="outline"
-                  className="h-11 w-full border-primary/25 sm:w-auto"
-                  onClick={() => setBulkOpen(true)}
-                >
-                  <Upload className="mr-2 h-4 w-4" />
-                  Bulk Import
-                </Button>
+                {canBulkImport && (
+                  <Button
+                    variant="outline"
+                    className="h-11 w-full border-primary/25 sm:w-auto"
+                    onClick={() => setBulkOpen(true)}
+                  >
+                    <Upload className="mr-2 h-4 w-4" />
+                    Bulk Import
+                  </Button>
+                )}
                 <Button className="h-11 w-full shadow-sm shadow-primary/25 sm:w-auto" onClick={openCreate}>
                   <Plus className="mr-2 h-4 w-4" />
                   Add Shop
@@ -331,21 +330,15 @@ const Shops = () => {
           className="h-11 w-full max-w-md"
         />
 
-        <div className="space-y-2">
-          <h2 className="text-lg font-semibold">Shop map</h2>
-          <p className="text-sm text-muted-foreground">
-            Red markers show shops with geocoded addresses
-          </p>
-          <Suspense
-            fallback={
-              <div className="flex h-[320px] items-center justify-center rounded-lg border">
-                <Loader2 className="h-6 w-6 animate-spin text-muted-foreground" />
-              </div>
-            }
-          >
-            <LocationsMap heightClassName="h-[320px] md:h-[420px]" pollSales={false} />
-          </Suspense>
-        </div>
+        {isAdmin && (
+          <div className="space-y-2">
+            <h2 className="text-lg font-semibold">Shop map</h2>
+            <p className="text-sm text-muted-foreground">
+              Red markers show shops with geocoded addresses
+            </p>
+            <DeferredLocationsMap heightClassName="h-[320px] md:h-[420px]" pollSales={false} />
+          </div>
+        )}
 
         <BulkUploadDialog
           open={bulkOpen}

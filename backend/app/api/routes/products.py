@@ -129,7 +129,7 @@ def list_products(
 def create_product(
     payload: ProductCreate,
     db: Session = Depends(get_db),
-    _: User = Depends(require_roles(AppRole.admin, AppRole.sales)),
+    _: User = Depends(require_roles(AppRole.admin, AppRole.srour)),
 ) -> Product:
     product = Product(**payload.model_dump())
     db.add(product)
@@ -155,7 +155,7 @@ def update_product(
     product_id: UUID,
     payload: ProductUpdate,
     db: Session = Depends(get_db),
-    _: User = Depends(require_roles(AppRole.admin, AppRole.sales)),
+    _: User = Depends(require_roles(AppRole.admin, AppRole.srour)),
 ) -> Product:
     product = db.query(Product).filter(Product.id == product_id).first()
     if not product:

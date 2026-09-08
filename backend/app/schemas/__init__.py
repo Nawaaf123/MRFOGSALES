@@ -31,6 +31,11 @@ class UserPublic(ORMModel):
     created_at: datetime
 
 
+class UserNamePublic(BaseModel):
+    id: UUID
+    full_name: str
+
+
 class AuthResponse(BaseModel):
     access_token: str
     token_type: str = "bearer"
@@ -213,6 +218,14 @@ class InvoiceCreate(BaseModel):
     # Same id on retry/double-submit returns the original invoice (no duplicate).
     # Stored as string; accept any non-empty client token up to 64 chars (not only UUID).
     client_request_id: str | None = Field(default=None, max_length=64)
+
+
+class InvoiceUpdate(BaseModel):
+    """Replace line items on an existing invoice (same-day edits for sales/srour)."""
+
+    items: list[InvoiceItemIn] = Field(min_length=1)
+    discount_amount: float = 0
+    notes: str | None = None
 
 
 class InvoiceItemOut(ORMModel):

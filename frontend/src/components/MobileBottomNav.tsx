@@ -1,8 +1,10 @@
+import { useEffect } from "react";
 import { useNavigate, useLocation } from "react-router-dom";
 import { useQueryClient } from "@tanstack/react-query";
 import { LayoutDashboard, ShoppingBag, FileText, Package } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { api } from "@/lib/api";
+import { buildPageParams, DEFAULT_PAGE_SIZE } from "@/lib/pagination";
 
 const items = [
   { icon: LayoutDashboard, label: "Home", path: "/dashboard", prefetch: "dashboard" as const },
@@ -16,35 +18,51 @@ export function MobileBottomNav() {
   const location = useLocation();
   const queryClient = useQueryClient();
 
+  // One-time cleanup: older builds prefetched a paginated page into shops catalog.
+  useEffect(() => {
+    const cached = queryClient.getQueryData(["shops", "catalog"]);
+    if (cached != null && !Array.isArray(cached)) {
+      queryClient.removeQueries({ queryKey: ["shops", "catalog"] });
+    }
+  }, [queryClient]);
+
   const prefetch = (kind: (typeof items)[number]["prefetch"]) => {
     if (kind === "dashboard") {
       void queryClient.prefetchQuery({
         queryKey: ["dashboard-stats"],
-        queryFn: () => api("/dashboard/stats"),
+        queryFn: () => api("/dashboard/stats", { timeoutMs: 15_000 }),
       });
       void queryClient.prefetchQuery({
         queryKey: ["pending-payments"],
-        queryFn: () => api("/dashboard/pending-payments"),
+        queryFn: () => api("/dashboard/pending-payments", { timeoutMs: 15_000 }),
       });
     } else if (kind === "shops") {
+      const params = buildPageParams({
+        include_frozen: true,
+        page: 1,
+        page_size: DEFAULT_PAGE_SIZE,
+      });
       void queryClient.prefetchQuery({
-        queryKey: ["shops", "include_frozen", "prefetch"],
-        queryFn: () =>
-          api("/shops?include_frozen=true&page=1&page_size=50"),
+        queryKey: ["shops", "include_frozen", params],
+        queryFn: () => api(`/shops${params}`, { timeoutMs: 15_000 }),
       });
     } else if (kind === "invoices") {
-      void queryClient.prefetchQuery({
-        queryKey: ["invoices", "?page=1&page_size=50"],
-        queryFn: () => api("/invoices?page=1&page_size=50"),
+      // Must match Invoices.tsx queryKey + response shape (paginated).
+      const params = buildPageParams({
+        page: 1,
+        page_size: DEFAULT_PAGE_SIZE,
       });
       void queryClient.prefetchQuery({
-        queryKey: ["shops", "catalog"],
-        queryFn: () => api("/shops?page=1&page_size=50"),
+        queryKey: ["invoices", params],
+        queryFn: () => api(`/invoices${params}`, { timeoutMs: 15_000 }),
       });
+      // Do NOT prefetch into ["shops", "catalog"] — that key stores a full Shop[]
+      // from fetchAllPages. Prefetching a page object here previously crashed Invoices.
     } else if (kind === "products") {
+      const params = buildPageParams({ page: 1, page_size: DEFAULT_PAGE_SIZE });
       void queryClient.prefetchQuery({
-        queryKey: ["products", "prefetch"],
-        queryFn: () => api("/products?page=1&page_size=1"),
+        queryKey: ["products", params],
+        queryFn: () => api(`/products${params}`, { timeoutMs: 15_000 }),
       });
     }
   };

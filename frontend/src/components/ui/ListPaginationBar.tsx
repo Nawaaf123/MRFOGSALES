@@ -8,6 +8,8 @@ type ListPaginationBarProps = {
   total: number;
   onPageChange: (page: number) => void;
   className?: string;
+  /** e.g. "shops" → "Showing 1–20 of 317 shops" */
+  itemLabel?: string;
 };
 
 export function ListPaginationBar({
@@ -16,6 +18,7 @@ export function ListPaginationBar({
   total,
   onPageChange,
   className,
+  itemLabel,
 }: ListPaginationBarProps) {
   const pages = pageCount(total, pageSize);
   if (total <= pageSize) return null;
@@ -29,6 +32,7 @@ export function ListPaginationBar({
     >
       <p className="text-sm text-muted-foreground">
         Showing {from}–{to} of {total}
+        {itemLabel ? ` ${itemLabel}` : ""}
       </p>
       <div className="flex items-center gap-2">
         <Button

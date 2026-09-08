@@ -30,7 +30,7 @@ class BulkResult(BaseModel):
 def bulk_create_products(
     payload: BulkProductsRequest,
     db: Session = Depends(get_db),
-    _: User = Depends(require_roles(AppRole.admin, AppRole.sales)),
+    _: User = Depends(require_roles(AppRole.admin)),
 ) -> BulkResult:
     """Create products, or update existing rows when barcode or SKU already matches."""
     created = 0
@@ -65,7 +65,7 @@ def bulk_create_products(
 def bulk_create_shops(
     payload: BulkShopsRequest,
     db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles(AppRole.admin, AppRole.sales)),
+    current_user: User = Depends(require_roles(AppRole.admin)),
 ) -> BulkResult:
     """
     Insert shops quickly. Geocoding 700+ rows in one request times out,

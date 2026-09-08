@@ -1,4 +1,4 @@
-import { lazy, Suspense, useMemo, useState } from "react";
+import { useMemo } from "react";
 import { useQuery } from "@tanstack/react-query";
 import { api } from "@/lib/api";
 import { useAuth } from "@/lib/auth";
@@ -9,7 +9,6 @@ import {
   DollarSign,
   Percent,
   AlertCircle,
-  Map as MapIcon,
   LayoutDashboard,
 } from "lucide-react";
 import { StatsCard } from "@/components/dashboard/StatsCard";
@@ -19,12 +18,7 @@ import { TopProducts } from "@/components/dashboard/TopProducts";
 import { TopShops } from "@/components/dashboard/TopShops";
 import { RecentActivity } from "@/components/dashboard/RecentActivity";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Button } from "@/components/ui/button";
 import { PageHero } from "@/components/ui/PageHero";
-
-const LocationsMap = lazy(() =>
-  import("@/components/location/SalesMap").then((m) => ({ default: m.LocationsMap }))
-);
 
 type DashboardStats = {
   products_count: number;
@@ -45,9 +39,6 @@ const greetingFor = () => {
 const Dashboard = () => {
   const { user } = useAuth();
   const isAdmin = user?.role === "admin";
-  const [showMap, setShowMap] = useState(() =>
-    typeof window !== "undefined" ? window.matchMedia("(min-width: 768px)").matches : true
-  );
 
   const { data: stats, isLoading } = useQuery({
     queryKey: ["dashboard-stats"],
@@ -179,47 +170,6 @@ const Dashboard = () => {
           <TopShops />
           <RecentActivity />
         </div>
-      )}
-
-      {isAdmin && (
-        <section className="overflow-hidden rounded-2xl border border-primary/15 bg-card">
-          <div className="flex flex-col gap-3 border-b border-primary/10 bg-gradient-to-r from-primary/[0.08] to-transparent px-4 py-4 sm:flex-row sm:items-center sm:justify-between sm:px-5">
-            <div>
-              <h2 className="flex items-center gap-2 text-lg font-semibold">
-                <MapIcon className="h-5 w-5 text-primary" />
-                Locations map
-              </h2>
-              <p className="text-sm text-muted-foreground">
-                Red markers show shop locations
-              </p>
-            </div>
-            {!showMap && (
-              <Button
-                variant="outline"
-                className="h-11 w-full border-primary/30 sm:w-auto"
-                onClick={() => setShowMap(true)}
-              >
-                <MapIcon className="mr-2 h-4 w-4" />
-                Load map
-              </Button>
-            )}
-          </div>
-          {showMap ? (
-            <Suspense
-              fallback={
-                <div className="flex h-[280px] items-center justify-center text-sm text-muted-foreground md:h-[400px]">
-                  Loading map…
-                </div>
-              }
-            >
-              <LocationsMap heightClassName="h-[280px] md:h-[420px]" />
-            </Suspense>
-          ) : (
-            <div className="flex h-[120px] items-center justify-center px-4 text-center text-sm text-muted-foreground">
-              Map paused on mobile to save data — tap Load map when you need it
-            </div>
-          )}
-        </section>
       )}
     </div>
   );
