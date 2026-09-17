@@ -228,7 +228,7 @@ const Invoices = () => {
   const canCreate = user?.role === "admin" || user?.role === "sales" || user?.role === "srour";
   const canPickWarehouse = user?.role === "admin";
   const isAdmin = user?.role === "admin";
-  const canDeleteInvoice = user?.role === "admin" || user?.role === "srour";
+  const canDeleteInvoice = user?.role === "admin";
   const canEditSameDay = canCreate;
 
   const [search, setSearch] = useState("");
@@ -307,20 +307,15 @@ const Invoices = () => {
   } = useQuery({
     queryKey: ["invoices", "all-for-shops", invoiceListFilters],
     queryFn: async () => {
-      try {
-        // Load every matching invoice so each shop group has its full history
-        // (not just whatever fits in a global page of 50).
-        return await fetchAllPages<Invoice>("/invoices", {
-          pageSize: 200,
-          extraParams: invoiceListFilters,
-          timeoutMs: 30_000,
-        });
-      } catch (err) {
-        if (isNetworkApiError(err as ApiError)) {
-          return [] as Invoice[];
-        }
-        throw err;
-      }
+      // Load every matching invoice so each shop group has its full history
+      // (not just whatever fits in a global page of 50).
+      // Let network/timeout errors propagate so the UI can show Retry
+      // instead of a fake empty "No invoices found" list.
+      return await fetchAllPages<Invoice>("/invoices", {
+        pageSize: 200,
+        extraParams: invoiceListFilters,
+        timeoutMs: 30_000,
+      });
     },
   });
 
@@ -481,20 +476,27 @@ const Invoices = () => {
     }
 
     return Array.from(map.values())
-      .map((g) => ({
-        ...g,
-        invoices: [...g.invoices].sort(
+      .map((g) => {
+        const invoicesSorted = [...g.invoices].sort(
           (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime()
-        ),
-        pending: g.invoices.reduce(
-          (sum, inv) =>
-            inv.local_sync
-              ? sum
-              : sum + Math.max(0, Number(inv.total_amount) - Number(inv.amount_paid || 0)),
-          0
-        ),
-      }))
-      .sort((a, b) => b.pending - a.pending || a.shopName.localeCompare(b.shopName));
+        );
+        return {
+          ...g,
+          invoices: invoicesSorted,
+          latestAt: new Date(invoicesSorted[0]?.created_at || 0).getTime(),
+          pending: g.invoices.reduce(
+            (sum, inv) =>
+              inv.local_sync
+                ? sum
+                : sum + Math.max(0, Number(inv.total_amount) - Number(inv.amount_paid || 0)),
+            0
+          ),
+        };
+      })
+      .sort(
+        (a, b) =>
+          b.latestAt - a.latestAt || b.pending - a.pending || a.shopName.localeCompare(b.shopName)
+      );
   }, [invoices, localPendingInvoices, shopFilter, statusFilter, debouncedSearch]);
 
   const pagedShopGroups = useMemo(() => {
@@ -1377,32 +1379,27 @@ const Invoices = () => {
                 <div key={i} className="h-24 animate-pulse rounded-xl border border-border bg-muted/60" />
               ))}
             </div>
-          ) : invoicesError ? (
-            <EmptyState
-              icon={FileText}
-              title="Couldn’t load invoices"
-              description={
-                (invoicesErrorObj as ApiError)?.message ||
-                "Check your connection and try again."
-              }
-              action={
-                <Button
-                  className="h-11"
-                  disabled={invoicesFetching}
-                  onClick={() => void refetchInvoicePage()}
-                >
-                  <RefreshCw className="mr-2 h-4 w-4" />
-                  {invoicesFetching ? "Retrying…" : "Retry"}
-                </Button>
-              }
-            />
           ) : shopGroups.length === 0 ? (
             <EmptyState
-              icon={FileText}
-              title="No invoices found"
-              description="Try another search or status, or create a new invoice"
+              icon={invoicesError ? CloudOff : FileText}
+              title={invoicesError ? "Couldn’t load invoices" : "No invoices found"}
+              description={
+                invoicesError
+                  ? (invoicesErrorObj as ApiError)?.message ||
+                    "Check your connection and try again."
+                  : "Try another search or status, or create a new invoice"
+              }
               action={
-                canCreate ? (
+                invoicesError ? (
+                  <Button
+                    className="h-11"
+                    disabled={invoicesFetching}
+                    onClick={() => void refetchInvoicePage()}
+                  >
+                    <RefreshCw className="mr-2 h-4 w-4" />
+                    {invoicesFetching ? "Retrying…" : "Retry"}
+                  </Button>
+                ) : canCreate ? (
                   <Button className="h-11" onClick={openCreateInvoice}>
                     <Plus className="mr-2 h-4 w-4" />
                     New Invoice
@@ -1411,7 +1408,31 @@ const Invoices = () => {
               }
             />
           ) : (
-            pagedShopGroups.map((group) => (
+            <>
+              {invoicesError && (
+                <div className="flex flex-col gap-2 rounded-xl border border-destructive/30 bg-destructive/5 px-3 py-3 sm:flex-row sm:items-center sm:justify-between">
+                  <div className="flex items-start gap-2 text-sm">
+                    <CloudOff className="mt-0.5 h-4 w-4 shrink-0 text-destructive" />
+                    <div>
+                      <p className="font-medium text-foreground">Couldn’t refresh invoices</p>
+                      <p className="text-muted-foreground">
+                        {(invoicesErrorObj as ApiError)?.message ||
+                          "Showing last loaded or offline invoices. Check your connection."}
+                      </p>
+                    </div>
+                  </div>
+                  <Button
+                    variant="outline"
+                    className="h-10 shrink-0"
+                    disabled={invoicesFetching}
+                    onClick={() => void refetchInvoicePage()}
+                  >
+                    <RefreshCw className="mr-2 h-4 w-4" />
+                    {invoicesFetching ? "Retrying…" : "Retry"}
+                  </Button>
+                </div>
+              )}
+              {pagedShopGroups.map((group) => (
               <ShopInvoiceGroup
                 key={group.shopId}
                 shopId={group.shopId}
@@ -1516,7 +1537,8 @@ const Invoices = () => {
                 profiles={profilesForNames}
                 onRefetch={refetchInvoices}
               />
-            ))
+            ))}
+            </>
           )}
           <ListPaginationBar
             page={page}
