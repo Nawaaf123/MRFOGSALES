@@ -73,18 +73,21 @@ def resolve_create_warehouse(user: User, requested: WarehouseCode | None) -> War
 def next_invoice_number(db: Session) -> str:
     """Allocate the next INV-###### under a transaction-scoped advisory lock.
 
-    Uses MAX(invoice_number) so gaps from failed concurrent inserts or deletes
-    cannot cause UniqueViolation on count+1.
+    Only considers plain INV-###### numbers. Legacy migrated numbers like
+    INV-YYYY-###### sort higher as text and must be ignored, otherwise every
+    create keeps proposing the same colliding INV-00NNNN.
     """
     db.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": _INVOICE_NUMBER_LOCK})
-    last = db.query(func.max(Invoice.invoice_number)).scalar()
+    last = db.execute(
+        text(
+            "SELECT MAX(invoice_number) FROM invoices "
+            "WHERE invoice_number ~ '^INV-[0-9]{6}$'"
+        )
+    ).scalar()
     if not last:
         n = 1
     else:
-        try:
-            n = int(str(last).rsplit("-", 1)[-1]) + 1
-        except ValueError:
-            n = (db.query(func.count(Invoice.id)).scalar() or 0) + 1
+        n = int(str(last).rsplit("-", 1)[-1]) + 1
     return f"INV-{n:06d}"
 
 
