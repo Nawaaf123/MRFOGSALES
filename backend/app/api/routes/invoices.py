@@ -450,7 +450,7 @@ def update_invoice(
 def delete_invoice(
     invoice_id: UUID,
     db: Session = Depends(get_db),
-    _: User = Depends(require_roles(AppRole.admin, AppRole.srour)),
+    _: User = Depends(require_roles(AppRole.admin)),
 ) -> None:
     invoice = load_invoice(db, invoice_id)
     if not invoice:
