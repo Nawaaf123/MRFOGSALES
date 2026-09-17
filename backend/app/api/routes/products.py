@@ -75,6 +75,8 @@ def list_products(
                     category=p.category,
                     subcategory=p.subcategory,
                     price=float(p.price or 0),
+                    stock_quantity=int(p.stock_quantity or 0),
+                    stock_quantity_b=int(p.stock_quantity_b or 0),
                 )
                 for p in products
             ],

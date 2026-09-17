@@ -118,6 +118,8 @@ class ProductBrief(ORMModel):
     category: str
     subcategory: str | None = None
     price: float
+    stock_quantity: int = 0
+    stock_quantity_b: int = 0
 
 
 class ShopCreate(BaseModel):
