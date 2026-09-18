@@ -6,8 +6,9 @@ from sqlalchemy import func, or_
 from sqlalchemy.orm import Session
 
 from app.api.deps import get_current_user, require_roles
+from app.api.routes.invoices import adjust_stock
 from app.db.session import get_db
-from app.models import AppRole, Product, User
+from app.models import AppRole, Product, User, WarehouseCode
 from app.schemas import (
     ProductBrief,
     ProductBriefListPage,
@@ -15,6 +16,9 @@ from app.schemas import (
     ProductListPage,
     ProductOut,
     ProductUpdate,
+    StockAdjustRequest,
+    StockAdjustResponse,
+    StockAdjustResultItem,
 )
 
 router = APIRouter(prefix="/products", tags=["products"])
@@ -138,6 +142,48 @@ def create_product(
     db.commit()
     db.refresh(product)
     return product
+
+
+@router.post("/stock-adjust", response_model=StockAdjustResponse)
+def adjust_product_stock(
+    payload: StockAdjustRequest,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles(AppRole.admin, AppRole.srour)),
+) -> StockAdjustResponse:
+    """Add stock to warehouse A or B for one or more products (receive inventory)."""
+    qty_by_id: dict[UUID, int] = {}
+    for item in payload.items:
+        qty_by_id[item.product_id] = qty_by_id.get(item.product_id, 0) + int(item.quantity)
+
+    product_ids = list(qty_by_id.keys())
+    products = (
+        db.query(Product)
+        .filter(Product.id.in_(product_ids), Product.is_active.is_(True))
+        .with_for_update()
+        .all()
+    )
+    product_map = {p.id: p for p in products}
+    missing = [pid for pid in product_ids if pid not in product_map]
+    if missing:
+        raise HTTPException(status_code=404, detail=f"Product not found: {missing[0]}")
+
+    warehouse = (payload.warehouse or WarehouseCode.A).value
+    results: list[StockAdjustResultItem] = []
+    for pid, qty in qty_by_id.items():
+        product = product_map[pid]
+        adjust_stock(product, warehouse, qty, restore=True)
+        results.append(
+            StockAdjustResultItem(
+                product_id=product.id,
+                name=product.name,
+                quantity_added=qty,
+                stock_quantity=int(product.stock_quantity or 0),
+                stock_quantity_b=int(product.stock_quantity_b or 0),
+            )
+        )
+
+    db.commit()
+    return StockAdjustResponse(warehouse=payload.warehouse or WarehouseCode.A, items=results)
 
 
 @router.get("/{product_id}", response_model=ProductOut)

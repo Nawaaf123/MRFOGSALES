@@ -313,6 +313,29 @@ class ProductBriefListPage(BaseModel):
     page_size: int
 
 
+class StockAdjustItem(BaseModel):
+    product_id: UUID
+    quantity: int = Field(ge=1)
+
+
+class StockAdjustRequest(BaseModel):
+    warehouse: WarehouseCode = WarehouseCode.A
+    items: list[StockAdjustItem] = Field(min_length=1)
+
+
+class StockAdjustResultItem(BaseModel):
+    product_id: UUID
+    name: str
+    quantity_added: int
+    stock_quantity: int
+    stock_quantity_b: int
+
+
+class StockAdjustResponse(BaseModel):
+    warehouse: WarehouseCode
+    items: list[StockAdjustResultItem]
+
+
 class ShopListPage(BaseModel):
     items: list[ShopOut]
     total: int

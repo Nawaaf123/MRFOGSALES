@@ -47,6 +47,7 @@ import {
 import { ListPaginationBar } from "@/components/ui/ListPaginationBar";
 import { useToast } from "@/hooks/use-toast";
 import { BulkProductUploadDialog } from "@/components/products/BulkProductUploadDialog";
+import { AddInventoryDialog } from "@/components/products/AddInventoryDialog";
 import { PageHero } from "@/components/ui/PageHero";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { cn } from "@/lib/utils";
@@ -57,6 +58,7 @@ import {
   ChevronsUpDown,
   Edit,
   Package,
+  PackagePlus,
   Plus,
   Power,
   Search,
@@ -150,6 +152,7 @@ const Products = () => {
   const [categoryOpen, setCategoryOpen] = useState(false);
   const [subcategoryOpen, setSubcategoryOpen] = useState(false);
   const [open, setOpen] = useState(false);
+  const [inventoryOpen, setInventoryOpen] = useState(false);
   const [editing, setEditing] = useState<Product | null>(null);
   const [form, setForm] = useState<ProductFormState>(emptyForm);
   const [deactivateId, setDeactivateId] = useState<string | null>(null);
@@ -312,6 +315,14 @@ const Products = () => {
                     subcategoryFilter={subcategoryFilter}
                   />
                 )}
+                <Button
+                  variant="outline"
+                  className="h-11 w-full sm:w-auto"
+                  onClick={() => setInventoryOpen(true)}
+                >
+                  <PackagePlus className="mr-2 h-4 w-4" />
+                  Add Inventory
+                </Button>
                 <Button className="h-11 w-full shadow-sm shadow-primary/25 sm:w-auto" onClick={openCreate}>
                   <Plus className="mr-2 h-4 w-4" />
                   Add Product
@@ -838,6 +849,8 @@ const Products = () => {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <AddInventoryDialog open={inventoryOpen} onOpenChange={setInventoryOpen} />
     </>
   );
 };
