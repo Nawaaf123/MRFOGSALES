@@ -6,7 +6,13 @@ from sqlalchemy import func
 from sqlalchemy.orm import Session, joinedload
 
 from app.api.deps import get_current_user, require_roles
-from app.api.routes.invoices import load_invoice, next_invoice_number, refresh_payment_status, serialize_invoice
+from app.api.routes.invoices import (
+    adjust_stock,
+    load_invoice,
+    next_invoice_number,
+    refresh_payment_status,
+    serialize_invoice,
+)
 from app.db.session import get_db
 from app.models import (
     AppRole,
@@ -166,8 +172,22 @@ def approve_order(
     db.add(invoice)
     db.flush()
 
+    product_ids = list({item.product_id for item in order.items if item.product_id})
+    products = (
+        db.query(Product).filter(Product.id.in_(product_ids)).with_for_update().all()
+        if product_ids
+        else []
+    )
+    product_map = {p.id: p for p in products}
+    wh = warehouse.value if warehouse else "A"
+
     for item in order.items:
-        product = db.query(Product).filter(Product.id == item.product_id).first()
+        product = product_map.get(item.product_id) if item.product_id else None
+        if not product:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Product not found: {item.product_id}",
+            )
         db.add(
             InvoiceItem(
                 invoice_id=invoice.id,
@@ -178,12 +198,7 @@ def approve_order(
                 subtotal=item.subtotal,
             )
         )
-        if product:
-            wh = warehouse.value if warehouse else "A"
-            if wh == "B":
-                product.stock_quantity_b = max(int(product.stock_quantity_b) - item.quantity, 0)
-            else:
-                product.stock_quantity = max(int(product.stock_quantity) - item.quantity, 0)
+        adjust_stock(product, wh, int(item.quantity), restore=False)
 
     order.status = OrderStatus.converted
     order.invoice_id = invoice.id

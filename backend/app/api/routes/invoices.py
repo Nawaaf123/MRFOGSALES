@@ -54,12 +54,36 @@ def is_same_business_day(created_at: datetime) -> bool:
     return dt.astimezone(_BUSINESS_TZ).date() == now.date()
 
 
-def adjust_stock(product: Product, warehouse: str, qty: int, *, restore: bool = False) -> None:
-    delta = -qty if not restore else qty
+def warehouse_stock(product: Product, warehouse: str) -> int:
     if warehouse == "B":
-        product.stock_quantity_b = max(int(product.stock_quantity_b or 0) + delta, 0)
+        return int(product.stock_quantity_b or 0)
+    return int(product.stock_quantity or 0)
+
+
+def adjust_stock(product: Product, warehouse: str, qty: int, *, restore: bool = False) -> None:
+    """Add or remove warehouse stock. Decrements refuse overselling (no silent clamp)."""
+    qty = int(qty)
+    if qty < 0:
+        raise HTTPException(status_code=400, detail="Quantity must be non-negative")
+    current = warehouse_stock(product, warehouse)
+    if restore:
+        new_qty = current + qty
     else:
-        product.stock_quantity = max(int(product.stock_quantity or 0) + delta, 0)
+        if current < qty:
+            label = product.name or "product"
+            wh = warehouse or "A"
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Insufficient stock for {label} in warehouse {wh} "
+                    f"(have {current}, need {qty})"
+                ),
+            )
+        new_qty = current - qty
+    if warehouse == "B":
+        product.stock_quantity_b = new_qty
+    else:
+        product.stock_quantity = new_qty
 
 
 def resolve_create_warehouse(user: User, requested: WarehouseCode | None) -> WarehouseCode:
@@ -401,46 +425,51 @@ def update_invoice(
         if pid not in product_map:
             raise HTTPException(status_code=404, detail=f"Product not found: {pid}")
 
-    # Restore stock from previous lines, then apply new lines.
-    for old in list(invoice.items or []):
-        if old.product_id and old.product_id in product_map:
-            adjust_stock(product_map[old.product_id], warehouse, int(old.quantity), restore=True)
-        db.delete(old)
-    db.flush()
+    try:
+        # Restore stock from previous lines, then apply new lines.
+        for old in list(invoice.items or []):
+            if old.product_id and old.product_id in product_map:
+                adjust_stock(product_map[old.product_id], warehouse, int(old.quantity), restore=True)
+            db.delete(old)
+        db.flush()
 
-    items_total = sum(item.subtotal for item in payload.items)
-    invoice.discount_amount = payload.discount_amount
-    invoice.notes = payload.notes
-    invoice.total_amount = max(items_total - payload.discount_amount, 0)
+        items_total = sum(item.subtotal for item in payload.items)
+        invoice.discount_amount = payload.discount_amount
+        invoice.notes = payload.notes
+        invoice.total_amount = max(items_total - payload.discount_amount, 0)
 
-    for item in payload.items:
-        product = product_map[item.product_id]
-        db.add(
-            InvoiceItem(
-                invoice_id=invoice.id,
-                product_id=item.product_id,
-                product_name=item.product_name,
-                quantity=item.quantity,
-                unit_price=item.unit_price,
-                subtotal=item.subtotal,
+        for item in payload.items:
+            product = product_map[item.product_id]
+            db.add(
+                InvoiceItem(
+                    invoice_id=invoice.id,
+                    product_id=item.product_id,
+                    product_name=item.product_name,
+                    quantity=item.quantity,
+                    unit_price=item.unit_price,
+                    subtotal=item.subtotal,
+                )
             )
-        )
-        adjust_stock(product, warehouse, item.quantity, restore=False)
+            adjust_stock(product, warehouse, item.quantity, restore=False)
 
-    db.flush()
-    paid = float(
-        db.query(func.coalesce(func.sum(Payment.amount), 0))
-        .filter(Payment.invoice_id == invoice.id)
-        .scalar()
-        or 0
-    )
-    if paid > float(invoice.total_amount) + 0.01:
-        raise HTTPException(
-            status_code=400,
-            detail="New total is less than payments already recorded on this invoice",
+        db.flush()
+        paid = float(
+            db.query(func.coalesce(func.sum(Payment.amount), 0))
+            .filter(Payment.invoice_id == invoice.id)
+            .scalar()
+            or 0
         )
-    refresh_payment_status(db, invoice)
-    db.commit()
+        if paid > float(invoice.total_amount) + 0.01:
+            raise HTTPException(
+                status_code=400,
+                detail="New total is less than payments already recorded on this invoice",
+            )
+        refresh_payment_status(db, invoice)
+        db.commit()
+    except HTTPException:
+        db.rollback()
+        raise
+
     loaded = load_invoice(db, invoice.id)
     assert loaded is not None
     return serialize_invoice(loaded, db)
@@ -455,6 +484,26 @@ def delete_invoice(
     invoice = load_invoice(db, invoice_id)
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found")
+
+    warehouse = invoice.warehouse.value if invoice.warehouse else "A"
+    product_ids = [item.product_id for item in (invoice.items or []) if item.product_id]
+    if product_ids:
+        products = (
+            db.query(Product)
+            .filter(Product.id.in_(list({*product_ids})))
+            .with_for_update()
+            .all()
+        )
+        product_map = {p.id: p for p in products}
+        for item in invoice.items or []:
+            if item.product_id and item.product_id in product_map:
+                adjust_stock(
+                    product_map[item.product_id],
+                    warehouse,
+                    int(item.quantity),
+                    restore=True,
+                )
+
     db.delete(invoice)
     db.commit()
 
