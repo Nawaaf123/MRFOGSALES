@@ -64,7 +64,9 @@ export function AddInventoryDialog({ open, onOpenChange }: AddInventoryDialogPro
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [categoryFilter, setCategoryFilter] = useState("all");
+  const [subcategoryFilter, setSubcategoryFilter] = useState("all");
   const [categoryOpen, setCategoryOpen] = useState(false);
+  const [subcategoryOpen, setSubcategoryOpen] = useState(false);
   const [lines, setLines] = useState<Line[]>([]);
 
   useEffect(() => {
@@ -78,6 +80,7 @@ export function AddInventoryDialog({ open, onOpenChange }: AddInventoryDialogPro
       setSearch("");
       setDebouncedSearch("");
       setCategoryFilter("all");
+      setSubcategoryFilter("all");
       setLines([]);
     }
   }, [open]);
@@ -101,6 +104,16 @@ export function AddInventoryDialog({ open, onOpenChange }: AddInventoryDialogPro
     [products]
   );
 
+  const subcategories = useMemo(() => {
+    const pool =
+      categoryFilter === "all"
+        ? products
+        : products.filter((p) => p.category === categoryFilter);
+    return Array.from(
+      new Set(pool.map((p) => p.subcategory).filter((s): s is string => Boolean(s)))
+    ).sort((a, b) => a.localeCompare(b));
+  }, [products, categoryFilter]);
+
   const canShowList = categoryFilter !== "all" || debouncedSearch.length >= 2;
 
   const filtered = useMemo(() => {
@@ -109,6 +122,9 @@ export function AddInventoryDialog({ open, onOpenChange }: AddInventoryDialogPro
     return products
       .filter((p) => {
         if (categoryFilter !== "all" && p.category !== categoryFilter) return false;
+        if (subcategoryFilter !== "all" && (p.subcategory || "") !== subcategoryFilter) {
+          return false;
+        }
         if (!q) return true;
         const hay = `${p.name} ${p.sku || ""} ${p.barcode || ""} ${p.category} ${
           p.subcategory || ""
@@ -116,7 +132,7 @@ export function AddInventoryDialog({ open, onOpenChange }: AddInventoryDialogPro
         return hay.includes(q);
       })
       .slice(0, 80);
-  }, [products, canShowList, categoryFilter, debouncedSearch]);
+  }, [products, canShowList, categoryFilter, subcategoryFilter, debouncedSearch]);
 
   const qtyOnList = useMemo(() => {
     const map = new Map<string, number>();
@@ -218,7 +234,7 @@ export function AddInventoryDialog({ open, onOpenChange }: AddInventoryDialogPro
             </Select>
           </div>
 
-          <div className="grid grid-cols-1 gap-3 sm:grid-cols-2">
+          <div className="grid grid-cols-1 gap-3 sm:grid-cols-3">
             <div className="space-y-2">
               <Label>Search</Label>
               <Input
@@ -249,6 +265,7 @@ export function AddInventoryDialog({ open, onOpenChange }: AddInventoryDialogPro
                           value="all categories"
                           onSelect={() => {
                             setCategoryFilter("all");
+                            setSubcategoryFilter("all");
                             setCategoryOpen(false);
                           }}
                         >
@@ -266,6 +283,7 @@ export function AddInventoryDialog({ open, onOpenChange }: AddInventoryDialogPro
                             value={category}
                             onSelect={() => {
                               setCategoryFilter(category);
+                              setSubcategoryFilter("all");
                               setCategoryOpen(false);
                             }}
                           >
@@ -276,6 +294,66 @@ export function AddInventoryDialog({ open, onOpenChange }: AddInventoryDialogPro
                               )}
                             />
                             {category}
+                          </CommandItem>
+                        ))}
+                      </CommandGroup>
+                    </CommandList>
+                  </Command>
+                </PopoverContent>
+              </Popover>
+            </div>
+            <div className="space-y-2">
+              <Label>Subcategory</Label>
+              <Popover open={subcategoryOpen} onOpenChange={setSubcategoryOpen}>
+                <PopoverTrigger asChild>
+                  <Button
+                    variant="outline"
+                    className="h-11 w-full justify-between font-normal"
+                    disabled={subcategories.length === 0}
+                  >
+                    <span className="truncate">
+                      {subcategoryFilter === "all" ? "All subcategories" : subcategoryFilter}
+                    </span>
+                    <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                  </Button>
+                </PopoverTrigger>
+                <PopoverContent className="w-[var(--radix-popover-trigger-width)] p-0" align="start">
+                  <Command>
+                    <CommandInput placeholder="Search subcategories..." />
+                    <CommandList>
+                      <CommandEmpty>No subcategory found.</CommandEmpty>
+                      <CommandGroup>
+                        <CommandItem
+                          value="all subcategories"
+                          onSelect={() => {
+                            setSubcategoryFilter("all");
+                            setSubcategoryOpen(false);
+                          }}
+                        >
+                          <Check
+                            className={cn(
+                              "mr-2 h-4 w-4",
+                              subcategoryFilter === "all" ? "opacity-100" : "opacity-0"
+                            )}
+                          />
+                          All subcategories
+                        </CommandItem>
+                        {subcategories.map((subcategory) => (
+                          <CommandItem
+                            key={subcategory}
+                            value={subcategory}
+                            onSelect={() => {
+                              setSubcategoryFilter(subcategory);
+                              setSubcategoryOpen(false);
+                            }}
+                          >
+                            <Check
+                              className={cn(
+                                "mr-2 h-4 w-4",
+                                subcategoryFilter === subcategory ? "opacity-100" : "opacity-0"
+                              )}
+                            />
+                            {subcategory}
                           </CommandItem>
                         ))}
                       </CommandGroup>
