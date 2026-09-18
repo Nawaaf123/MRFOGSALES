@@ -119,17 +119,26 @@ export function AddInventoryDialog({ open, onOpenChange }: AddInventoryDialogPro
   const filtered = useMemo(() => {
     if (!canShowList) return [];
     const q = debouncedSearch.toLowerCase();
-    return products
-      .filter((p) => {
-        if (categoryFilter !== "all" && p.category !== categoryFilter) return false;
-        if (subcategoryFilter !== "all" && (p.subcategory || "") !== subcategoryFilter) {
-          return false;
-        }
-        if (!q) return true;
-        const hay = `${p.name} ${p.sku || ""} ${p.barcode || ""} ${p.category} ${
-          p.subcategory || ""
-        }`.toLowerCase();
-        return hay.includes(q);
+    const rows = products.filter((p) => {
+      if (categoryFilter !== "all" && p.category !== categoryFilter) return false;
+      if (subcategoryFilter !== "all" && (p.subcategory || "") !== subcategoryFilter) {
+        return false;
+      }
+      if (!q) return true;
+      const hay = `${p.name} ${p.sku || ""} ${p.barcode || ""} ${p.category} ${
+        p.subcategory || ""
+      }`.toLowerCase();
+      return hay.includes(q);
+    });
+    return [...rows]
+      .sort((a, b) => {
+        const sa = (a.sku || "").trim().toLowerCase();
+        const sb = (b.sku || "").trim().toLowerCase();
+        if (!sa && !sb) return a.name.localeCompare(b.name);
+        if (!sa) return 1;
+        if (!sb) return -1;
+        const cmp = sa.localeCompare(sb, undefined, { numeric: true, sensitivity: "base" });
+        return cmp !== 0 ? cmp : a.name.localeCompare(b.name);
       })
       .slice(0, 80);
   }, [products, canShowList, categoryFilter, subcategoryFilter, debouncedSearch]);
