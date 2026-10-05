@@ -118,6 +118,8 @@ class ProductBrief(ORMModel):
     category: str
     subcategory: str | None = None
     price: float
+    stock_quantity: int = 0
+    stock_quantity_b: int = 0
 
 
 class ShopCreate(BaseModel):
@@ -309,6 +311,29 @@ class ProductBriefListPage(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class StockAdjustItem(BaseModel):
+    product_id: UUID
+    quantity: int = Field(ge=1)
+
+
+class StockAdjustRequest(BaseModel):
+    warehouse: WarehouseCode = WarehouseCode.A
+    items: list[StockAdjustItem] = Field(min_length=1)
+
+
+class StockAdjustResultItem(BaseModel):
+    product_id: UUID
+    name: str
+    quantity_added: int
+    stock_quantity: int
+    stock_quantity_b: int
+
+
+class StockAdjustResponse(BaseModel):
+    warehouse: WarehouseCode
+    items: list[StockAdjustResultItem]
 
 
 class ShopListPage(BaseModel):

@@ -47,6 +47,7 @@ import {
 import { ListPaginationBar } from "@/components/ui/ListPaginationBar";
 import { useToast } from "@/hooks/use-toast";
 import { BulkProductUploadDialog } from "@/components/products/BulkProductUploadDialog";
+import { AddInventoryDialog } from "@/components/products/AddInventoryDialog";
 import { PageHero } from "@/components/ui/PageHero";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { cn } from "@/lib/utils";
@@ -57,6 +58,7 @@ import {
   ChevronsUpDown,
   Edit,
   Package,
+  PackagePlus,
   Plus,
   Power,
   Search,
@@ -150,8 +152,13 @@ const Products = () => {
   const [categoryOpen, setCategoryOpen] = useState(false);
   const [subcategoryOpen, setSubcategoryOpen] = useState(false);
   const [open, setOpen] = useState(false);
+  const [inventoryOpen, setInventoryOpen] = useState(false);
   const [editing, setEditing] = useState<Product | null>(null);
   const [form, setForm] = useState<ProductFormState>(emptyForm);
+  const [categoryIsNew, setCategoryIsNew] = useState(false);
+  const [subcategoryIsNew, setSubcategoryIsNew] = useState(false);
+  const [formCategoryOpen, setFormCategoryOpen] = useState(false);
+  const [formSubcategoryOpen, setFormSubcategoryOpen] = useState(false);
   const [deactivateId, setDeactivateId] = useState<string | null>(null);
   const [page, setPage] = useState(1);
   const pageSize = DEFAULT_PAGE_SIZE;
@@ -211,10 +218,30 @@ const Products = () => {
   const activeCount = productPage?.active_count ?? 0;
   const lowStockCount = productPage?.low_stock_count ?? 0;
 
+  const formSubsParams = useMemo(
+    () =>
+      buildPageParams({
+        category: form.category.trim() || undefined,
+        page: 1,
+        page_size: 1,
+      }),
+    [form.category]
+  );
+
+  const { data: formSubsPage } = useQuery({
+    queryKey: ["products", "form-subcategories", form.category],
+    queryFn: () =>
+      api<Paginated<Product> & { subcategories?: string[] }>(`/products${formSubsParams}`),
+    enabled: open && !categoryIsNew && Boolean(form.category.trim()),
+    staleTime: 60_000,
+  });
+  const formSubcategories = formSubsPage?.subcategories ?? [];
+
   const saveMutation = useMutation({
     mutationFn: () => {
       const body = formPayload(form);
       if (!body.name) throw { message: "Product name is required" } satisfies ApiError;
+      if (!body.category) throw { message: "Category is required" } satisfies ApiError;
       if (editing) {
         return api<Product>(`/products/${editing.id}`, {
           method: "PATCH",
@@ -271,12 +298,17 @@ const Products = () => {
   const openCreate = () => {
     setEditing(null);
     setForm(emptyForm);
+    setCategoryIsNew(false);
+    setSubcategoryIsNew(false);
     setOpen(true);
   };
 
   const openEdit = (product: Product) => {
     setEditing(product);
     setForm(toForm(product));
+    const cat = (product.category || "General").trim();
+    setCategoryIsNew(categories.length > 0 && !categories.includes(cat));
+    setSubcategoryIsNew(false);
     setOpen(true);
   };
 
@@ -312,6 +344,14 @@ const Products = () => {
                     subcategoryFilter={subcategoryFilter}
                   />
                 )}
+                <Button
+                  variant="outline"
+                  className="h-11 w-full sm:w-auto"
+                  onClick={() => setInventoryOpen(true)}
+                >
+                  <PackagePlus className="mr-2 h-4 w-4" />
+                  Add Inventory
+                </Button>
                 <Button className="h-11 w-full shadow-sm shadow-primary/25 sm:w-auto" onClick={openCreate}>
                   <Plus className="mr-2 h-4 w-4" />
                   Add Product
@@ -695,6 +735,8 @@ const Products = () => {
           if (!next) {
             setEditing(null);
             setForm(emptyForm);
+            setCategoryIsNew(false);
+            setSubcategoryIsNew(false);
           }
         }}
       >
@@ -733,24 +775,186 @@ const Products = () => {
             </div>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div className="space-y-2">
-                <Label>Category</Label>
-                <Input
-                  value={form.category}
-                  onChange={(e) => setForm({ ...form, category: e.target.value })}
-                  list="product-categories"
-                />
-                <datalist id="product-categories">
-                  {categories.map((c) => (
-                    <option key={c} value={c} />
-                  ))}
-                </datalist>
+                <div className="flex items-center justify-between gap-2">
+                  <Label>Category *</Label>
+                  <Button
+                    type="button"
+                    variant="link"
+                    className="h-auto p-0 text-xs"
+                    onClick={() => {
+                      setCategoryIsNew((v) => !v);
+                      if (!categoryIsNew) {
+                        setForm((f) => ({ ...f, category: "", subcategory: "" }));
+                        setSubcategoryIsNew(true);
+                      } else {
+                        setForm((f) => ({
+                          ...f,
+                          category: categories[0] || "General",
+                          subcategory: "",
+                        }));
+                        setSubcategoryIsNew(false);
+                      }
+                    }}
+                  >
+                    {categoryIsNew ? "Pick existing" : "New category"}
+                  </Button>
+                </div>
+                {categoryIsNew ? (
+                  <Input
+                    value={form.category}
+                    onChange={(e) =>
+                      setForm({ ...form, category: e.target.value, subcategory: "" })
+                    }
+                    placeholder="Type new category name"
+                  />
+                ) : (
+                  <Popover open={formCategoryOpen} onOpenChange={setFormCategoryOpen}>
+                    <PopoverTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        role="combobox"
+                        className="h-11 w-full justify-between font-normal"
+                      >
+                        <span className="truncate">{form.category || "Select category"}</span>
+                        <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent
+                      className="w-[var(--radix-popover-trigger-width)] p-0"
+                      align="start"
+                    >
+                      <Command>
+                        <CommandInput placeholder="Search categories..." />
+                        <CommandList>
+                          <CommandEmpty>No category found.</CommandEmpty>
+                          <CommandGroup>
+                            {categories.map((category) => (
+                              <CommandItem
+                                key={category}
+                                value={category}
+                                onSelect={() => {
+                                  setForm({ ...form, category, subcategory: "" });
+                                  setSubcategoryIsNew(false);
+                                  setFormCategoryOpen(false);
+                                }}
+                              >
+                                <Check
+                                  className={cn(
+                                    "mr-2 h-4 w-4",
+                                    form.category === category ? "opacity-100" : "opacity-0"
+                                  )}
+                                />
+                                {category}
+                              </CommandItem>
+                            ))}
+                          </CommandGroup>
+                        </CommandList>
+                      </Command>
+                    </PopoverContent>
+                  </Popover>
+                )}
               </div>
               <div className="space-y-2">
-                <Label>Subcategory</Label>
-                <Input
-                  value={form.subcategory}
-                  onChange={(e) => setForm({ ...form, subcategory: e.target.value })}
-                />
+                <div className="flex items-center justify-between gap-2">
+                  <Label>Subcategory</Label>
+                  <Button
+                    type="button"
+                    variant="link"
+                    className="h-auto p-0 text-xs"
+                    disabled={!form.category.trim()}
+                    onClick={() => {
+                      setSubcategoryIsNew((v) => !v);
+                      if (!subcategoryIsNew) {
+                        setForm((f) => ({ ...f, subcategory: "" }));
+                      } else {
+                        setForm((f) => ({
+                          ...f,
+                          subcategory: formSubcategories[0] || "",
+                        }));
+                      }
+                    }}
+                  >
+                    {subcategoryIsNew ? "Pick existing" : "New subcategory"}
+                  </Button>
+                </div>
+                {subcategoryIsNew || categoryIsNew ? (
+                  <Input
+                    value={form.subcategory}
+                    onChange={(e) => setForm({ ...form, subcategory: e.target.value })}
+                    placeholder={
+                      categoryIsNew
+                        ? "Optional new subcategory"
+                        : "Type new subcategory name"
+                    }
+                    disabled={!form.category.trim()}
+                  />
+                ) : (
+                  <Popover open={formSubcategoryOpen} onOpenChange={setFormSubcategoryOpen}>
+                    <PopoverTrigger asChild>
+                      <Button
+                        type="button"
+                        variant="outline"
+                        role="combobox"
+                        className="h-11 w-full justify-between font-normal"
+                        disabled={!form.category.trim()}
+                      >
+                        <span className="truncate">
+                          {form.subcategory || "Select subcategory (optional)"}
+                        </span>
+                        <ChevronsUpDown className="ml-2 h-4 w-4 shrink-0 opacity-50" />
+                      </Button>
+                    </PopoverTrigger>
+                    <PopoverContent
+                      className="w-[var(--radix-popover-trigger-width)] p-0"
+                      align="start"
+                    >
+                      <Command>
+                        <CommandInput placeholder="Search subcategories..." />
+                        <CommandList>
+                          <CommandEmpty>No subcategory found.</CommandEmpty>
+                          <CommandGroup>
+                            <CommandItem
+                              value="none clear subcategory"
+                              onSelect={() => {
+                                setForm({ ...form, subcategory: "" });
+                                setFormSubcategoryOpen(false);
+                              }}
+                            >
+                              <Check
+                                className={cn(
+                                  "mr-2 h-4 w-4",
+                                  !form.subcategory ? "opacity-100" : "opacity-0"
+                                )}
+                              />
+                              None
+                            </CommandItem>
+                            {formSubcategories.map((subcategory) => (
+                              <CommandItem
+                                key={subcategory}
+                                value={subcategory}
+                                onSelect={() => {
+                                  setForm({ ...form, subcategory });
+                                  setFormSubcategoryOpen(false);
+                                }}
+                              >
+                                <Check
+                                  className={cn(
+                                    "mr-2 h-4 w-4",
+                                    form.subcategory === subcategory
+                                      ? "opacity-100"
+                                      : "opacity-0"
+                                  )}
+                                />
+                                {subcategory}
+                              </CommandItem>
+                            ))}
+                          </CommandGroup>
+                        </CommandList>
+                      </Command>
+                    </PopoverContent>
+                  </Popover>
+                )}
               </div>
             </div>
             <div className="space-y-2">
@@ -838,6 +1042,8 @@ const Products = () => {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <AddInventoryDialog open={inventoryOpen} onOpenChange={setInventoryOpen} />
     </>
   );
 };

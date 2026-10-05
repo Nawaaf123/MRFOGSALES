@@ -96,9 +96,11 @@ type Product = {
   sku?: string | null;
   barcode?: string | null;
   price: number;
-  is_active: boolean;
+  is_active?: boolean;
   category: string;
   subcategory?: string | null;
+  stock_quantity?: number;
+  stock_quantity_b?: number;
 };
 
 type UserProfile = {
@@ -419,6 +421,16 @@ const Invoices = () => {
     return map;
   }, [items]);
 
+  /** Max qty allowed for a product on this invoice (warehouse stock; on edit includes lines already on the invoice). */
+  const stockAvailableForProduct = (product: Product) => {
+    const whStock =
+      warehouse === "B"
+        ? Number(product.stock_quantity_b ?? 0)
+        : Number(product.stock_quantity ?? 0);
+    const onInvoice = itemQtyByProduct.get(product.id) || 0;
+    return editingInvoiceId ? whStock + onInvoice : whStock;
+  };
+
   const { data: profiles = [] } = useQuery({
     queryKey: ["users", "names-for-invoices"],
     queryFn: () => api<UserProfile[]>("/users/names"),
@@ -697,6 +709,16 @@ const Invoices = () => {
   ]);
 
   const addProductQuick = (product: Product) => {
+    const maxQty = stockAvailableForProduct(product);
+    const currentQty = itemQtyByProduct.get(product.id) || 0;
+    if (currentQty + 1 > maxQty) {
+      toast({
+        title: "Not enough stock",
+        description: `${product.name}: only ${maxQty} available in warehouse ${warehouse}`,
+        variant: "destructive",
+      });
+      return;
+    }
     setItems((prev) => {
       const existing = prev.findIndex((i) => i.product_id === product.id);
       if (existing >= 0) {
@@ -820,10 +842,38 @@ const Invoices = () => {
   const updateLine = (index: number, field: "quantity" | "unit_price", value: number) => {
     const next = [...items];
     const safe = Number.isFinite(value) && value >= 0 ? value : 0;
-    next[index] = {
-      ...next[index],
-      [field]: field === "quantity" ? Math.max(1, Math.floor(safe) || 1) : safe,
-    };
+    if (field === "quantity") {
+      const product = products.find((p) => p.id === next[index].product_id);
+      let qty = Math.max(1, Math.floor(safe) || 1);
+      if (product) {
+        const whStock =
+          warehouse === "B"
+            ? Number(product.stock_quantity_b ?? 0)
+            : Number(product.stock_quantity ?? 0);
+        // Other lines of same product (if any) + this line's new qty cannot exceed available.
+        const others = items.reduce(
+          (sum, item, i) =>
+            i !== index && item.product_id === next[index].product_id ? sum + item.quantity : sum,
+          0
+        );
+        const maxForLine = Math.max(
+          1,
+          (editingInvoiceId ? whStock + (itemQtyByProduct.get(next[index].product_id) || 0) : whStock) -
+            others
+        );
+        if (qty > maxForLine) {
+          toast({
+            title: "Not enough stock",
+            description: `${next[index].product_name}: only ${maxForLine} available in warehouse ${warehouse}`,
+            variant: "destructive",
+          });
+          qty = maxForLine;
+        }
+      }
+      next[index] = { ...next[index], quantity: qty };
+    } else {
+      next[index] = { ...next[index], unit_price: safe };
+    }
     next[index].subtotal = next[index].quantity * next[index].unit_price;
     setItems(next);
   };
@@ -1176,6 +1226,8 @@ const Invoices = () => {
       api(`/invoices/${invoice.id}`, { method: "DELETE" }),
     onSuccess: () => {
       refetchInvoices();
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
       setDeleteInvoice(null);
       toast({ title: "Invoice deleted" });
     },
@@ -1832,14 +1884,18 @@ const Invoices = () => {
                 ) : (
                   filteredCreateProducts.map((product) => {
                     const qty = itemQtyByProduct.get(product.id) || 0;
+                    const stock = stockAvailableForProduct(product);
+                    const outOfStock = stock <= 0;
                     return (
                       <button
                         key={product.id}
                         type="button"
                         onClick={() => addProductQuick(product)}
+                        disabled={outOfStock && qty === 0}
                         className={cn(
                           "w-full max-w-full text-left px-3 py-2.5 min-h-11 flex items-center gap-2 hover:bg-muted/80 active:bg-muted transition-colors",
-                          qty > 0 && "bg-primary/5"
+                          qty > 0 && "bg-primary/5",
+                          outOfStock && qty === 0 && "opacity-50 cursor-not-allowed"
                         )}
                       >
                         <div className="min-w-0 flex-1 overflow-hidden">
@@ -1853,13 +1909,28 @@ const Invoices = () => {
                             {product.category}
                             {product.subcategory ? ` · ${product.subcategory}` : ""}
                             {` · $${Number(product.price).toFixed(2)}`}
+                            {` · Stock ${stock}`}
                           </p>
                         </div>
-                        {qty > 0 ? (
-                          <Badge className="shrink-0">{qty}</Badge>
-                        ) : (
-                          <Plus className="h-4 w-4 shrink-0 text-muted-foreground" />
-                        )}
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span
+                            className={cn(
+                              "text-xs font-medium tabular-nums",
+                              stock <= 0
+                                ? "text-destructive"
+                                : stock <= 10
+                                  ? "text-amber-600 dark:text-amber-500"
+                                  : "text-muted-foreground"
+                            )}
+                          >
+                            {stock}
+                          </span>
+                          {qty > 0 ? (
+                            <Badge className="shrink-0">{qty}</Badge>
+                          ) : (
+                            <Plus className="h-4 w-4 shrink-0 text-muted-foreground" />
+                          )}
+                        </div>
                       </button>
                     );
                   })
@@ -1877,6 +1948,16 @@ const Invoices = () => {
                         <div className="min-w-0">
                           <p className="font-mono text-sm font-semibold">{item.product_sku || "—"}</p>
                           <p className="text-sm truncate">{item.product_name}</p>
+                          {(() => {
+                            const product = products.find((p) => p.id === item.product_id);
+                            if (!product) return null;
+                            const stock = stockAvailableForProduct(product);
+                            return (
+                              <p className="text-xs text-muted-foreground">
+                                Stock {stock} (WH {warehouse})
+                              </p>
+                            );
+                          })()}
                         </div>
                         <Button
                           variant="ghost"
@@ -1924,6 +2005,7 @@ const Invoices = () => {
                       <TableRow>
                         <TableHead>SKU</TableHead>
                         <TableHead>Flavor</TableHead>
+                        <TableHead className="w-20">Stock</TableHead>
                         <TableHead className="w-24">Qty</TableHead>
                         <TableHead className="w-28">Price</TableHead>
                         <TableHead className="w-28">Subtotal</TableHead>
@@ -1931,16 +2013,32 @@ const Invoices = () => {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {items.map((item, index) => (
+                      {items.map((item, index) => {
+                        const product = products.find((p) => p.id === item.product_id);
+                        const stock = product ? stockAvailableForProduct(product) : null;
+                        return (
                         <TableRow key={`${item.product_id}-${index}`}>
                           <TableCell className="font-mono text-sm">
                             {item.product_sku || "-"}
                           </TableCell>
                           <TableCell>{item.product_name}</TableCell>
+                          <TableCell
+                            className={cn(
+                              "tabular-nums text-sm",
+                              stock != null && stock <= 0
+                                ? "text-destructive"
+                                : stock != null && stock <= 10
+                                  ? "text-amber-600 dark:text-amber-500"
+                                  : "text-muted-foreground"
+                            )}
+                          >
+                            {stock ?? "—"}
+                          </TableCell>
                           <TableCell>
                             <Input
                               type="number"
                               min="1"
+                              max={stock ?? undefined}
                               inputMode="numeric"
                               value={item.quantity}
                               onChange={(e) => updateLine(index, "quantity", Number(e.target.value))}
@@ -1969,7 +2067,8 @@ const Invoices = () => {
                             </Button>
                           </TableCell>
                         </TableRow>
-                      ))}
+                        );
+                      })}
                     </TableBody>
                   </Table>
                 </div>

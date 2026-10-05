@@ -35,7 +35,7 @@ export function FilterChips({ items, value, onChange, className }: FilterChipsPr
               <span
                 className={cn(
                   "rounded-md px-1.5 py-0.5 text-xs tabular-nums",
-                  active ? "bg-white/20" : "bg-muted text-muted-foreground"
+                  active ? "bg-primary-foreground/20" : "bg-muted text-muted-foreground"
                 )}
               >
                 {item.count}
