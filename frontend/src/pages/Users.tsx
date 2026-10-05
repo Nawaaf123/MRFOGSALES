@@ -187,7 +187,7 @@ const Users = () => {
         <PageHero
           icon={UsersIcon}
           title="Users"
-          description="Team accounts, roles, and warehouses"
+          description="Active team accounts, roles, and warehouses"
           stats={[
             { label: "Total", value: users.length, accent: true },
             { label: "Sales", value: roleCounts.sales },
@@ -459,7 +459,7 @@ const Users = () => {
           <AlertDialogHeader>
             <AlertDialogTitle>Deactivate user?</AlertDialogTitle>
             <AlertDialogDescription>
-              They will no longer be able to sign in until reactivated.
+              They will disappear from this list and will not be able to sign in.
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>

@@ -8,6 +8,7 @@ All colors MUST be HSL.
 
 @layer base {
   :root {
+    color-scheme: light;
     /* MR FOG Brand Colors */
     --background: 0 0% 100%;
     --foreground: 0 0% 13%;
@@ -61,6 +62,7 @@ All colors MUST be HSL.
   }
 
   .dark {
+    color-scheme: dark;
     --background: 0 0% 7%;
     --foreground: 0 0% 98%;
 
