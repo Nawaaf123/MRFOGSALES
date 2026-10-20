@@ -430,10 +430,20 @@ def update_invoice(
         raise HTTPException(status_code=404, detail="Invoice not found")
 
     role = _user_role(current_user)
-    if role != AppRole.admin and not is_same_business_day(invoice.created_at):
+    open_balance = invoice.payment_status in (PaymentStatus.unpaid, PaymentStatus.partial)
+    can_edit = (
+        role == AppRole.admin
+        or is_same_business_day(invoice.created_at)
+        or (role == AppRole.srour and open_balance)
+    )
+    if not can_edit:
         raise HTTPException(
             status_code=403,
-            detail="Only invoices created today can be edited",
+            detail=(
+                "Paid invoices can only be edited on the day they were created"
+                if role == AppRole.srour
+                else "Only invoices created today can be edited"
+            ),
         )
     if not payload.items:
         raise HTTPException(status_code=400, detail="Invoice requires at least one item")

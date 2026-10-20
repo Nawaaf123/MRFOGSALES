@@ -282,6 +282,7 @@ const Invoices = () => {
   const canCreate = user?.role === "admin" || user?.role === "sales" || user?.role === "srour";
   const canPickWarehouse = user?.role === "admin" || user?.role === "srour";
   const isAdmin = user?.role === "admin";
+  const isSrour = user?.role === "srour";
   const canDeleteInvoice = user?.role === "admin";
   const canEditSameDay = canCreate;
 
@@ -670,22 +671,36 @@ const Invoices = () => {
     setCreateOpen(true);
   };
 
-  const canEditInvoiceRow = (inv: { local_sync?: string; created_at: string; invoice_number?: string }) => {
+  const canEditInvoiceRow = (inv: {
+    local_sync?: string;
+    created_at: string;
+    invoice_number?: string;
+    payment_status?: PaymentStatus;
+  }) => {
     if (!canEditSameDay) return false;
     if (inv.local_sync) return false;
     // Legacy opening-balance invoices have no editable product lines.
     if (inv.invoice_number?.startsWith("LEGACY") || inv.invoice_number?.includes("LEGACY")) return false;
     if (isAdmin) return true;
-    return isSameBusinessDay(inv.created_at);
+    if (isSameBusinessDay(inv.created_at)) return true;
+    return isSrour && (inv.payment_status === "unpaid" || inv.payment_status === "partial");
   };
 
-  const openEditInvoice = async (inv: { id: string; local_sync?: string; created_at: string; invoice_number: string }) => {
+  const openEditInvoice = async (inv: {
+    id: string;
+    local_sync?: string;
+    created_at: string;
+    invoice_number: string;
+    payment_status?: PaymentStatus;
+  }) => {
     if (!canEditInvoiceRow(inv)) {
       toast({
         title: "Cannot edit",
         description: isAdmin
           ? "This invoice cannot be edited."
-          : "Only invoices created today can be edited.",
+          : isSrour
+            ? "Paid invoices can only be edited on the day they were created."
+            : "Only invoices created today can be edited.",
         variant: "destructive",
       });
       return;
@@ -2459,6 +2474,25 @@ const Invoices = () => {
                   {viewInvoice.local_sync_error ||
                     "Saved on this device only. It will upload when you’re online. PDF/email after sync."}
                 </p>
+              )}
+              {Number(viewInvoice.discount_amount || 0) > 0 && (
+                <div className="grid grid-cols-3 gap-3 rounded-md bg-muted/50 px-3 py-2">
+                  <div>
+                    <p className="text-muted-foreground text-xs">Subtotal</p>
+                    <p className="font-semibold">
+                      $
+                      {(
+                        Number(viewInvoice.total_amount) + Number(viewInvoice.discount_amount || 0)
+                      ).toFixed(2)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground text-xs">Discount</p>
+                    <p className="font-semibold text-green-600 dark:text-green-500">
+                      -${Number(viewInvoice.discount_amount).toFixed(2)}
+                    </p>
+                  </div>
+                </div>
               )}
               <div className="grid grid-cols-3 gap-3">
                 <div>
