@@ -128,6 +128,7 @@ type InvoiceItem = {
   unit_price: number;
   subtotal: number;
   warehouse?: WarehouseCode | null;
+  product_sku?: string | null;
 };
 
 type InvoiceShop = {
@@ -712,7 +713,7 @@ const Invoices = () => {
       const loadedItems: LineItemDraft[] = full.items.map((item) => ({
         product_id: item.product_id,
         product_name: item.product_name,
-        product_sku: null,
+        product_sku: item.product_sku ?? null,
         quantity: item.quantity,
         unit_price: Number(item.unit_price),
         subtotal: Number(item.subtotal),

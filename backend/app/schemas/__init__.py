@@ -240,6 +240,8 @@ class InvoiceItemOut(ORMModel):
     unit_price: float
     subtotal: float
     warehouse: WarehouseCode | None = None
+    # Product's current SKU (not stored on the line).
+    product_sku: str | None = None
 
 
 class PaymentOut(ORMModel):

@@ -2,6 +2,7 @@ import { format } from "date-fns";
 
 interface InvoiceItem {
   product_name: string;
+  product_sku?: string | null;
   quantity: number;
   unit_price: number;
   subtotal: number;
@@ -125,8 +126,9 @@ export const generateInvoicePDF = async (invoice: InvoiceData, totalPaid: number
   
   autoTable(doc, {
     startY: yPos,
-    head: [["Product", "Quantity", "Unit Price", "Subtotal"]],
+    head: [["SKU", "Product", "Qty", "Unit Price", "Subtotal"]],
     body: invoice.items.map(item => [
+      item.product_sku?.trim() || "-",
       item.product_name,
       item.quantity.toString(),
       `$${Number(item.unit_price).toFixed(2)}`,
@@ -144,10 +146,11 @@ export const generateInvoicePDF = async (invoice: InvoiceData, totalPaid: number
       cellPadding: 4
     },
     columnStyles: {
-      0: { cellWidth: 80 },
-      1: { halign: "center", cellWidth: 30 },
-      2: { halign: "right", cellWidth: 35 },
-      3: { halign: "right", cellWidth: 35 }
+      0: { cellWidth: 28 },
+      1: { cellWidth: "auto" },
+      2: { halign: "center", cellWidth: 20 },
+      3: { halign: "right", cellWidth: 30 },
+      4: { halign: "right", cellWidth: 30 }
     }
   });
   

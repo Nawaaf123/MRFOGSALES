@@ -26,6 +26,7 @@ from app.schemas import (
     DistributePaymentResult,
     InvoiceCreate,
     InvoiceEmailRequest,
+    InvoiceItemOut,
     InvoiceListOut,
     InvoiceListPage,
     InvoiceOut,
@@ -149,6 +150,18 @@ def serialize_invoice(invoice: Invoice, db: Session, *, amount_paid: float | Non
         )
         amount_paid = float(paid or 0)
     shop = ShopBrief.model_validate(invoice.shop) if invoice.shop else None
+    product_ids = {item.product_id for item in (invoice.items or []) if item.product_id}
+    sku_by_product = (
+        dict(db.query(Product.id, Product.sku).filter(Product.id.in_(product_ids)).all())
+        if product_ids
+        else {}
+    )
+    items = [
+        InvoiceItemOut.model_validate(item).model_copy(
+            update={"product_sku": (sku_by_product.get(item.product_id) or "").strip() or None}
+        )
+        for item in (invoice.items or [])
+    ]
     return InvoiceOut(
         id=invoice.id,
         invoice_number=invoice.invoice_number,
@@ -161,7 +174,7 @@ def serialize_invoice(invoice: Invoice, db: Session, *, amount_paid: float | Non
         warehouse=invoice.warehouse,
         created_at=invoice.created_at,
         updated_at=invoice.updated_at,
-        items=invoice.items or [],
+        items=items,
         payments=invoice.payments or [],
         shop=shop,
         amount_paid=amount_paid,
