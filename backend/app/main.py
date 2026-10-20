@@ -50,6 +50,9 @@ async def lifespan(_: FastAPI):
             "ON invoices (client_request_id) WHERE client_request_id IS NOT NULL",
             "CREATE INDEX IF NOT EXISTS ix_products_is_active ON products (is_active)",
             "CREATE INDEX IF NOT EXISTS ix_shops_is_frozen ON shops (is_frozen)",
+            "ALTER TABLE invoice_items ADD COLUMN IF NOT EXISTS warehouse warehouse_code",
+            "UPDATE invoice_items ii SET warehouse = COALESCE(i.warehouse, 'A') "
+            "FROM invoices i WHERE ii.invoice_id = i.id AND ii.warehouse IS NULL",
         ]:
             conn.execute(text(statement))
 

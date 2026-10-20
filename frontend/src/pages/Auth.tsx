@@ -9,6 +9,7 @@ import { Textarea } from "@/components/ui/textarea";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
 import mrFogLogo from "@/assets/mr-fog-logo.jpg";
+import { ThemeToggle } from "@/components/ThemeToggle";
 
 type AuthMode = "login" | "signup" | "retailer";
 
@@ -126,10 +127,13 @@ const Auth = () => {
   ];
 
   return (
-    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-white p-4">
+    <div className="relative flex min-h-screen items-center justify-center overflow-hidden bg-background p-4">
+      <div className="absolute right-3 top-3 z-10 sm:right-4 sm:top-4">
+        <ThemeToggle />
+      </div>
       <div
         aria-hidden
-        className="pointer-events-none absolute inset-0 bg-gradient-to-br from-primary/[0.14] via-white to-primary/[0.05]"
+        className="pointer-events-none absolute inset-0 bg-gradient-to-br from-primary/[0.14] via-background to-primary/[0.05]"
       />
       <div
         aria-hidden
@@ -140,7 +144,7 @@ const Auth = () => {
         className="pointer-events-none absolute -right-16 bottom-0 h-64 w-64 rounded-full bg-primary/10 blur-3xl"
       />
 
-      <div className="relative w-full max-w-md overflow-hidden rounded-2xl border border-primary/15 bg-white/90 shadow-lg shadow-primary/10 backdrop-blur-sm">
+      <div className="relative w-full max-w-md overflow-hidden rounded-2xl border border-primary/15 bg-card/90 shadow-lg shadow-primary/10 backdrop-blur-sm">
         <div className="border-b border-primary/10 bg-gradient-to-r from-primary/15 to-transparent px-6 py-6 text-center">
           <img
             src={mrFogLogo}

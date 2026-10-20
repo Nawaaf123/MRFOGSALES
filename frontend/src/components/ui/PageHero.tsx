@@ -29,18 +29,19 @@ export function PageHero({
     <section
       className={cn(
         "relative overflow-hidden rounded-2xl border border-primary/15",
-        "bg-gradient-to-br from-primary/[0.12] via-white to-white",
+        "bg-gradient-to-br from-primary/[0.12] via-background to-card",
+        "dark:from-primary/[0.18] dark:via-card dark:to-card",
         "px-4 py-5 sm:px-6 sm:py-6",
         className
       )}
     >
       <div
         aria-hidden
-        className="pointer-events-none absolute -right-10 -top-12 h-40 w-40 rounded-full bg-primary/20 blur-2xl"
+        className="pointer-events-none absolute -right-10 -top-12 h-40 w-40 rounded-full bg-primary/20 blur-2xl dark:bg-primary/25"
       />
       <div
         aria-hidden
-        className="pointer-events-none absolute -bottom-16 right-16 h-36 w-36 rounded-full bg-primary/10 blur-2xl"
+        className="pointer-events-none absolute -bottom-16 right-16 h-36 w-36 rounded-full bg-primary/10 blur-2xl dark:bg-primary/15"
       />
 
       <div className="relative flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
@@ -49,7 +50,7 @@ export function PageHero({
             <Icon className="h-6 w-6" />
           </div>
           <div>
-            <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">{title}</h1>
+            <h1 className="text-2xl font-bold tracking-tight text-foreground sm:text-3xl">{title}</h1>
             {description && (
               <p className="mt-1 max-w-lg text-sm text-muted-foreground">{description}</p>
             )}
@@ -72,8 +73,9 @@ export function PageHero({
             <div
               key={stat.label}
               className={cn(
-                "rounded-xl border bg-white/80 px-3 py-3 backdrop-blur-sm",
-                stat.accent ? "border-primary/15" : "border-border"
+                "rounded-xl border bg-card/90 px-3 py-3 shadow-sm backdrop-blur-sm",
+                "dark:bg-background/60 dark:border-border",
+                stat.accent ? "border-primary/20" : "border-border"
               )}
             >
               <p

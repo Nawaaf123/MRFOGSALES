@@ -26,6 +26,7 @@ from app.schemas import (
     DistributePaymentResult,
     InvoiceCreate,
     InvoiceEmailRequest,
+    InvoiceItemOut,
     InvoiceListOut,
     InvoiceListPage,
     InvoiceOut,
@@ -54,20 +55,53 @@ def is_same_business_day(created_at: datetime) -> bool:
     return dt.astimezone(_BUSINESS_TZ).date() == now.date()
 
 
-def adjust_stock(product: Product, warehouse: str, qty: int, *, restore: bool = False) -> None:
-    delta = -qty if not restore else qty
+def warehouse_stock(product: Product, warehouse: str) -> int:
     if warehouse == "B":
-        product.stock_quantity_b = max(int(product.stock_quantity_b or 0) + delta, 0)
+        return int(product.stock_quantity_b or 0)
+    return int(product.stock_quantity or 0)
+
+
+def adjust_stock(product: Product, warehouse: str, qty: int, *, restore: bool = False) -> None:
+    """Add or remove warehouse stock. Decrements refuse overselling (no silent clamp)."""
+    qty = int(qty)
+    if qty < 0:
+        raise HTTPException(status_code=400, detail="Quantity must be non-negative")
+    current = warehouse_stock(product, warehouse)
+    if restore:
+        new_qty = current + qty
     else:
-        product.stock_quantity = max(int(product.stock_quantity or 0) + delta, 0)
+        if current < qty:
+            label = product.name or "product"
+            wh = warehouse or "A"
+            raise HTTPException(
+                status_code=400,
+                detail=(
+                    f"Insufficient stock for {label} in warehouse {wh} "
+                    f"(have {current}, need {qty})"
+                ),
+            )
+        new_qty = current - qty
+    if warehouse == "B":
+        product.stock_quantity_b = new_qty
+    else:
+        product.stock_quantity = new_qty
+
+
+def can_pick_warehouse(user: User) -> bool:
+    return _user_role(user) in (AppRole.admin, AppRole.srour)
 
 
 def resolve_create_warehouse(user: User, requested: WarehouseCode | None) -> WarehouseCode:
-    """Admin may pick A/B; sales/srour always use their assigned warehouse."""
-    role = _user_role(user)
-    if role == AppRole.admin:
-        return requested or WarehouseCode.A
+    """Admin/srour may pick A/B; sales always use their assigned warehouse."""
+    if can_pick_warehouse(user):
+        return requested or user.assigned_warehouse or WarehouseCode.A
     return user.assigned_warehouse or WarehouseCode.A
+
+
+def item_warehouse(item: InvoiceItem, invoice: Invoice) -> str:
+    """Warehouse a saved line took stock from (older lines fall back to the invoice)."""
+    wh = item.warehouse or invoice.warehouse
+    return wh.value if wh else "A"
 
 
 def next_invoice_number(db: Session) -> str:
@@ -116,6 +150,18 @@ def serialize_invoice(invoice: Invoice, db: Session, *, amount_paid: float | Non
         )
         amount_paid = float(paid or 0)
     shop = ShopBrief.model_validate(invoice.shop) if invoice.shop else None
+    product_ids = {item.product_id for item in (invoice.items or []) if item.product_id}
+    sku_by_product = (
+        dict(db.query(Product.id, Product.sku).filter(Product.id.in_(product_ids)).all())
+        if product_ids
+        else {}
+    )
+    items = [
+        InvoiceItemOut.model_validate(item).model_copy(
+            update={"product_sku": (sku_by_product.get(item.product_id) or "").strip() or None}
+        )
+        for item in (invoice.items or [])
+    ]
     return InvoiceOut(
         id=invoice.id,
         invoice_number=invoice.invoice_number,
@@ -128,7 +174,7 @@ def serialize_invoice(invoice: Invoice, db: Session, *, amount_paid: float | Non
         warehouse=invoice.warehouse,
         created_at=invoice.created_at,
         updated_at=invoice.updated_at,
-        items=invoice.items or [],
+        items=items,
         payments=invoice.payments or [],
         shop=shop,
         amount_paid=amount_paid,
@@ -297,9 +343,11 @@ def create_invoice(
             if missing:
                 raise HTTPException(status_code=404, detail=f"Product not found: {missing[0]}")
 
-            warehouse = (invoice.warehouse.value if invoice.warehouse else "A")
+            default_wh = invoice.warehouse or WarehouseCode.A
+            pick = can_pick_warehouse(current_user)
             for item in payload.items:
                 product = product_map[item.product_id]
+                line_wh = (item.warehouse if pick and item.warehouse else default_wh)
                 db.add(
                     InvoiceItem(
                         invoice_id=invoice.id,
@@ -308,9 +356,10 @@ def create_invoice(
                         quantity=item.quantity,
                         unit_price=item.unit_price,
                         subtotal=item.subtotal,
+                        warehouse=line_wh,
                     )
                 )
-                adjust_stock(product, warehouse, item.quantity, restore=False)
+                adjust_stock(product, line_wh.value, item.quantity, restore=False)
 
             for payment_in in payload.payments:
                 db.add(
@@ -381,15 +430,31 @@ def update_invoice(
         raise HTTPException(status_code=404, detail="Invoice not found")
 
     role = _user_role(current_user)
-    if role != AppRole.admin and not is_same_business_day(invoice.created_at):
+    open_balance = invoice.payment_status in (PaymentStatus.unpaid, PaymentStatus.partial)
+    can_edit = (
+        role == AppRole.admin
+        or is_same_business_day(invoice.created_at)
+        or (role == AppRole.srour and open_balance)
+    )
+    if not can_edit:
         raise HTTPException(
             status_code=403,
-            detail="Only invoices created today can be edited",
+            detail=(
+                "Paid invoices can only be edited on the day they were created"
+                if role == AppRole.srour
+                else "Only invoices created today can be edited"
+            ),
         )
     if not payload.items:
         raise HTTPException(status_code=400, detail="Invoice requires at least one item")
 
-    warehouse = invoice.warehouse.value if invoice.warehouse else "A"
+    default_wh = invoice.warehouse or WarehouseCode.A
+    pick = can_pick_warehouse(current_user)
+    # Sales can't choose: a product already on the invoice stays in its warehouse.
+    old_wh_by_product: dict[UUID, WarehouseCode] = {}
+    for old in invoice.items or []:
+        if old.product_id:
+            old_wh_by_product.setdefault(old.product_id, WarehouseCode(item_warehouse(old, invoice)))
     old_product_ids = [item.product_id for item in (invoice.items or []) if item.product_id]
     new_product_ids = [item.product_id for item in payload.items]
     all_ids = list({*old_product_ids, *new_product_ids})
@@ -401,46 +466,61 @@ def update_invoice(
         if pid not in product_map:
             raise HTTPException(status_code=404, detail=f"Product not found: {pid}")
 
-    # Restore stock from previous lines, then apply new lines.
-    for old in list(invoice.items or []):
-        if old.product_id and old.product_id in product_map:
-            adjust_stock(product_map[old.product_id], warehouse, int(old.quantity), restore=True)
-        db.delete(old)
-    db.flush()
+    try:
+        # Restore stock from previous lines, then apply new lines.
+        for old in list(invoice.items or []):
+            if old.product_id and old.product_id in product_map:
+                adjust_stock(
+                    product_map[old.product_id],
+                    item_warehouse(old, invoice),
+                    int(old.quantity),
+                    restore=True,
+                )
+            db.delete(old)
+        db.flush()
 
-    items_total = sum(item.subtotal for item in payload.items)
-    invoice.discount_amount = payload.discount_amount
-    invoice.notes = payload.notes
-    invoice.total_amount = max(items_total - payload.discount_amount, 0)
+        items_total = sum(item.subtotal for item in payload.items)
+        invoice.discount_amount = payload.discount_amount
+        invoice.notes = payload.notes
+        invoice.total_amount = max(items_total - payload.discount_amount, 0)
 
-    for item in payload.items:
-        product = product_map[item.product_id]
-        db.add(
-            InvoiceItem(
-                invoice_id=invoice.id,
-                product_id=item.product_id,
-                product_name=item.product_name,
-                quantity=item.quantity,
-                unit_price=item.unit_price,
-                subtotal=item.subtotal,
+        for item in payload.items:
+            product = product_map[item.product_id]
+            if pick and item.warehouse:
+                line_wh = item.warehouse
+            else:
+                line_wh = old_wh_by_product.get(item.product_id, default_wh)
+            db.add(
+                InvoiceItem(
+                    invoice_id=invoice.id,
+                    product_id=item.product_id,
+                    product_name=item.product_name,
+                    quantity=item.quantity,
+                    unit_price=item.unit_price,
+                    subtotal=item.subtotal,
+                    warehouse=line_wh,
+                )
             )
-        )
-        adjust_stock(product, warehouse, item.quantity, restore=False)
+            adjust_stock(product, line_wh.value, item.quantity, restore=False)
 
-    db.flush()
-    paid = float(
-        db.query(func.coalesce(func.sum(Payment.amount), 0))
-        .filter(Payment.invoice_id == invoice.id)
-        .scalar()
-        or 0
-    )
-    if paid > float(invoice.total_amount) + 0.01:
-        raise HTTPException(
-            status_code=400,
-            detail="New total is less than payments already recorded on this invoice",
+        db.flush()
+        paid = float(
+            db.query(func.coalesce(func.sum(Payment.amount), 0))
+            .filter(Payment.invoice_id == invoice.id)
+            .scalar()
+            or 0
         )
-    refresh_payment_status(db, invoice)
-    db.commit()
+        if paid > float(invoice.total_amount) + 0.01:
+            raise HTTPException(
+                status_code=400,
+                detail="New total is less than payments already recorded on this invoice",
+            )
+        refresh_payment_status(db, invoice)
+        db.commit()
+    except HTTPException:
+        db.rollback()
+        raise
+
     loaded = load_invoice(db, invoice.id)
     assert loaded is not None
     return serialize_invoice(loaded, db)
@@ -455,6 +535,25 @@ def delete_invoice(
     invoice = load_invoice(db, invoice_id)
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found")
+
+    product_ids = [item.product_id for item in (invoice.items or []) if item.product_id]
+    if product_ids:
+        products = (
+            db.query(Product)
+            .filter(Product.id.in_(list({*product_ids})))
+            .with_for_update()
+            .all()
+        )
+        product_map = {p.id: p for p in products}
+        for item in invoice.items or []:
+            if item.product_id and item.product_id in product_map:
+                adjust_stock(
+                    product_map[item.product_id],
+                    item_warehouse(item, invoice),
+                    int(item.quantity),
+                    restore=True,
+                )
+
     db.delete(invoice)
     db.commit()
 

@@ -33,7 +33,13 @@ def list_users(
     db: Session = Depends(get_db),
     _: User = Depends(require_roles(AppRole.admin)),
 ) -> list[UserPublic]:
-    users = db.query(User).options(joinedload(User.role)).order_by(User.created_at.desc()).all()
+    users = (
+        db.query(User)
+        .options(joinedload(User.role))
+        .filter(User.is_active.is_(True))
+        .order_by(User.created_at.desc())
+        .all()
+    )
     return [serialize_user(user) for user in users]
 
 
