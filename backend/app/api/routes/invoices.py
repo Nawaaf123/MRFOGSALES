@@ -86,12 +86,21 @@ def adjust_stock(product: Product, warehouse: str, qty: int, *, restore: bool = 
         product.stock_quantity = new_qty
 
 
+def can_pick_warehouse(user: User) -> bool:
+    return _user_role(user) in (AppRole.admin, AppRole.srour)
+
+
 def resolve_create_warehouse(user: User, requested: WarehouseCode | None) -> WarehouseCode:
-    """Admin may pick A/B; sales/srour always use their assigned warehouse."""
-    role = _user_role(user)
-    if role == AppRole.admin:
-        return requested or WarehouseCode.A
+    """Admin/srour may pick A/B; sales always use their assigned warehouse."""
+    if can_pick_warehouse(user):
+        return requested or user.assigned_warehouse or WarehouseCode.A
     return user.assigned_warehouse or WarehouseCode.A
+
+
+def item_warehouse(item: InvoiceItem, invoice: Invoice) -> str:
+    """Warehouse a saved line took stock from (older lines fall back to the invoice)."""
+    wh = item.warehouse or invoice.warehouse
+    return wh.value if wh else "A"
 
 
 def next_invoice_number(db: Session) -> str:
@@ -321,9 +330,11 @@ def create_invoice(
             if missing:
                 raise HTTPException(status_code=404, detail=f"Product not found: {missing[0]}")
 
-            warehouse = (invoice.warehouse.value if invoice.warehouse else "A")
+            default_wh = invoice.warehouse or WarehouseCode.A
+            pick = can_pick_warehouse(current_user)
             for item in payload.items:
                 product = product_map[item.product_id]
+                line_wh = (item.warehouse if pick and item.warehouse else default_wh)
                 db.add(
                     InvoiceItem(
                         invoice_id=invoice.id,
@@ -332,9 +343,10 @@ def create_invoice(
                         quantity=item.quantity,
                         unit_price=item.unit_price,
                         subtotal=item.subtotal,
+                        warehouse=line_wh,
                     )
                 )
-                adjust_stock(product, warehouse, item.quantity, restore=False)
+                adjust_stock(product, line_wh.value, item.quantity, restore=False)
 
             for payment_in in payload.payments:
                 db.add(
@@ -413,7 +425,13 @@ def update_invoice(
     if not payload.items:
         raise HTTPException(status_code=400, detail="Invoice requires at least one item")
 
-    warehouse = invoice.warehouse.value if invoice.warehouse else "A"
+    default_wh = invoice.warehouse or WarehouseCode.A
+    pick = can_pick_warehouse(current_user)
+    # Sales can't choose: a product already on the invoice stays in its warehouse.
+    old_wh_by_product: dict[UUID, WarehouseCode] = {}
+    for old in invoice.items or []:
+        if old.product_id:
+            old_wh_by_product.setdefault(old.product_id, WarehouseCode(item_warehouse(old, invoice)))
     old_product_ids = [item.product_id for item in (invoice.items or []) if item.product_id]
     new_product_ids = [item.product_id for item in payload.items]
     all_ids = list({*old_product_ids, *new_product_ids})
@@ -429,7 +447,12 @@ def update_invoice(
         # Restore stock from previous lines, then apply new lines.
         for old in list(invoice.items or []):
             if old.product_id and old.product_id in product_map:
-                adjust_stock(product_map[old.product_id], warehouse, int(old.quantity), restore=True)
+                adjust_stock(
+                    product_map[old.product_id],
+                    item_warehouse(old, invoice),
+                    int(old.quantity),
+                    restore=True,
+                )
             db.delete(old)
         db.flush()
 
@@ -440,6 +463,10 @@ def update_invoice(
 
         for item in payload.items:
             product = product_map[item.product_id]
+            if pick and item.warehouse:
+                line_wh = item.warehouse
+            else:
+                line_wh = old_wh_by_product.get(item.product_id, default_wh)
             db.add(
                 InvoiceItem(
                     invoice_id=invoice.id,
@@ -448,9 +475,10 @@ def update_invoice(
                     quantity=item.quantity,
                     unit_price=item.unit_price,
                     subtotal=item.subtotal,
+                    warehouse=line_wh,
                 )
             )
-            adjust_stock(product, warehouse, item.quantity, restore=False)
+            adjust_stock(product, line_wh.value, item.quantity, restore=False)
 
         db.flush()
         paid = float(
@@ -485,7 +513,6 @@ def delete_invoice(
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found")
 
-    warehouse = invoice.warehouse.value if invoice.warehouse else "A"
     product_ids = [item.product_id for item in (invoice.items or []) if item.product_id]
     if product_ids:
         products = (
@@ -499,7 +526,7 @@ def delete_invoice(
             if item.product_id and item.product_id in product_map:
                 adjust_stock(
                     product_map[item.product_id],
-                    warehouse,
+                    item_warehouse(item, invoice),
                     int(item.quantity),
                     restore=True,
                 )

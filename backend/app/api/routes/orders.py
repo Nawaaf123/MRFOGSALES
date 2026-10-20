@@ -25,6 +25,7 @@ from app.models import (
     Product,
     Shop,
     User,
+    WarehouseCode,
 )
 from app.schemas import (
     OrderApproveResponse,
@@ -196,6 +197,7 @@ def approve_order(
                 quantity=item.quantity,
                 unit_price=item.unit_price,
                 subtotal=item.subtotal,
+                warehouse=WarehouseCode(wh),
             )
         )
         adjust_stock(product, wh, int(item.quantity), restore=False)

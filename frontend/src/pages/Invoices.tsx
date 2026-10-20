@@ -118,6 +118,8 @@ type InvoicePayment = {
   payment_date: string;
 };
 
+type WarehouseCode = "A" | "B";
+
 type InvoiceItem = {
   id?: string;
   product_id: string;
@@ -125,6 +127,7 @@ type InvoiceItem = {
   quantity: number;
   unit_price: number;
   subtotal: number;
+  warehouse?: WarehouseCode | null;
 };
 
 type InvoiceShop = {
@@ -200,10 +203,58 @@ type LineItemDraft = {
   quantity: number;
   unit_price: number;
   subtotal: number;
+  warehouse: WarehouseCode;
 };
 
 function skuSortKey(sku: string | null | undefined) {
   return (sku || "").trim().toLowerCase();
+}
+
+function warehouseStock(product: Product, wh: WarehouseCode) {
+  return wh === "B" ? Number(product.stock_quantity_b ?? 0) : Number(product.stock_quantity ?? 0);
+}
+
+function otherWarehouse(wh: WarehouseCode): WarehouseCode {
+  return wh === "A" ? "B" : "A";
+}
+
+const lineKey = (productId: string, wh: WarehouseCode) => `${productId}|${wh}`;
+
+function WarehouseToggle({
+  value,
+  onChange,
+  stockA,
+  stockB,
+}: {
+  value: WarehouseCode;
+  onChange: (wh: WarehouseCode) => void;
+  stockA: number | null;
+  stockB: number | null;
+}) {
+  return (
+    <div className="inline-flex rounded-md border p-0.5" role="group" aria-label="Warehouse">
+      {(["A", "B"] as const).map((wh) => {
+        const stock = wh === "A" ? stockA : stockB;
+        return (
+          <button
+            key={wh}
+            type="button"
+            onClick={() => onChange(wh)}
+            aria-pressed={value === wh}
+            className={cn(
+              "h-8 min-w-12 rounded px-2 text-xs font-medium tabular-nums transition-colors",
+              value === wh
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:bg-muted"
+            )}
+          >
+            {wh}
+            {stock != null && <span className="ml-1 opacity-80">{stock}</span>}
+          </button>
+        );
+      })}
+    </div>
+  );
 }
 
 const statusBadgeVariant = (status: PaymentStatus): "default" | "secondary" | "destructive" => {
@@ -228,7 +279,7 @@ const Invoices = () => {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const canCreate = user?.role === "admin" || user?.role === "sales" || user?.role === "srour";
-  const canPickWarehouse = user?.role === "admin";
+  const canPickWarehouse = user?.role === "admin" || user?.role === "srour";
   const isAdmin = user?.role === "admin";
   const canDeleteInvoice = user?.role === "admin";
   const canEditSameDay = canCreate;
@@ -260,6 +311,8 @@ const Invoices = () => {
   const [discountAmount, setDiscountAmount] = useState("");
   const [warehouse, setWarehouse] = useState<"A" | "B">(user?.assigned_warehouse || "A");
   const [items, setItems] = useState<LineItemDraft[]>([]);
+  // Quantities already saved on the invoice being edited; the API returns them to stock first.
+  const [originalQtyByKey, setOriginalQtyByKey] = useState<Map<string, number>>(() => new Map());
   const [productSearch, setProductSearch] = useState("");
   const [createCategoryFilter, setCreateCategoryFilter] = useState("all");
   const [createSubcategoryFilter, setCreateSubcategoryFilter] = useState("all");
@@ -421,15 +474,19 @@ const Invoices = () => {
     return map;
   }, [items]);
 
-  /** Max qty allowed for a product on this invoice (warehouse stock; on edit includes lines already on the invoice). */
-  const stockAvailableForProduct = (product: Product) => {
-    const whStock =
-      warehouse === "B"
-        ? Number(product.stock_quantity_b ?? 0)
-        : Number(product.stock_quantity ?? 0);
-    const onInvoice = itemQtyByProduct.get(product.id) || 0;
-    return editingInvoiceId ? whStock + onInvoice : whStock;
-  };
+  /** Max qty this invoice may take from one warehouse (on edit, includes what it already holds there). */
+  const capacityFor = (product: Product, wh: WarehouseCode) =>
+    warehouseStock(product, wh) +
+    (editingInvoiceId ? originalQtyByKey.get(lineKey(product.id, wh)) || 0 : 0);
+
+  const qtyOnInvoice = (productId: string, wh: WarehouseCode, excludeIndex?: number) =>
+    items.reduce(
+      (sum, item, i) =>
+        i !== excludeIndex && item.product_id === productId && item.warehouse === wh
+          ? sum + item.quantity
+          : sum,
+      0
+    );
 
   const { data: profiles = [] } = useQuery({
     queryKey: ["users", "names-for-invoices"],
@@ -548,6 +605,7 @@ const Invoices = () => {
     setDiscountAmount("");
     setWarehouse(user?.assigned_warehouse || "A");
     setItems([]);
+    setOriginalQtyByKey(new Map());
     setProductSearch("");
     setCreateCategoryFilter("all");
     setCreateSubcategoryFilter("all");
@@ -568,12 +626,22 @@ const Invoices = () => {
     setSelectedShopName("");
     setNotes(draft.notes || "");
     setDiscountAmount(draft.discount_amount || "");
-    setWarehouse(draft.warehouse === "B" ? "B" : "A");
+    const draftWarehouse: WarehouseCode = draft.warehouse === "B" ? "B" : "A";
+    setWarehouse(draftWarehouse);
     setItems(
       Array.isArray(draft.items)
-        ? draft.items.filter((item) => isValidUuid(item.product_id))
+        ? draft.items
+            .filter((item) => isValidUuid(item.product_id))
+            .map((item) => ({
+              ...item,
+              warehouse:
+                canPickWarehouse && (item.warehouse === "A" || item.warehouse === "B")
+                  ? item.warehouse
+                  : draftWarehouse,
+            }))
         : []
     );
+    setOriginalQtyByKey(new Map());
     setProductSearch("");
     setCreateCategoryFilter("all");
     setCreateSubcategoryFilter("all");
@@ -638,17 +706,25 @@ const Invoices = () => {
       setSelectedShopName(full.shop?.name || "");
       setNotes(full.notes || "");
       setDiscountAmount(full.discount_amount ? String(full.discount_amount) : "");
-      setWarehouse((full.warehouse as "A" | "B") || user?.assigned_warehouse || "A");
-      setItems(
-        full.items.map((item) => ({
-          product_id: item.product_id,
-          product_name: item.product_name,
-          product_sku: null,
-          quantity: item.quantity,
-          unit_price: Number(item.unit_price),
-          subtotal: Number(item.subtotal),
-        }))
-      );
+      const invoiceWarehouse: WarehouseCode =
+        (full.warehouse as WarehouseCode) || user?.assigned_warehouse || "A";
+      setWarehouse(invoiceWarehouse);
+      const loadedItems: LineItemDraft[] = full.items.map((item) => ({
+        product_id: item.product_id,
+        product_name: item.product_name,
+        product_sku: null,
+        quantity: item.quantity,
+        unit_price: Number(item.unit_price),
+        subtotal: Number(item.subtotal),
+        warehouse: item.warehouse || invoiceWarehouse,
+      }));
+      const original = new Map<string, number>();
+      for (const item of loadedItems) {
+        const key = lineKey(item.product_id, item.warehouse);
+        original.set(key, (original.get(key) || 0) + item.quantity);
+      }
+      setOriginalQtyByKey(original);
+      setItems(loadedItems);
       setCashAmount("");
       setCheckAmount("");
       setCreditAmount("");
@@ -709,18 +785,28 @@ const Invoices = () => {
   ]);
 
   const addProductQuick = (product: Product) => {
-    const maxQty = stockAvailableForProduct(product);
-    const currentQty = itemQtyByProduct.get(product.id) || 0;
-    if (currentQty + 1 > maxQty) {
+    const hasRoom = (wh: WarehouseCode) => qtyOnInvoice(product.id, wh) + 1 <= capacityFor(product, wh);
+    let lineWh: WarehouseCode = warehouse;
+    if (!hasRoom(lineWh)) {
+      const other = otherWarehouse(lineWh);
+      if (!canPickWarehouse || !hasRoom(other)) {
+        toast({
+          title: "Not enough stock",
+          description: canPickWarehouse
+            ? `${product.name}: none left in warehouse A or B`
+            : `${product.name}: only ${capacityFor(product, lineWh)} available in warehouse ${lineWh}`,
+          variant: "destructive",
+        });
+        return;
+      }
+      lineWh = other;
       toast({
-        title: "Not enough stock",
-        description: `${product.name}: only ${maxQty} available in warehouse ${warehouse}`,
-        variant: "destructive",
+        title: `Added from warehouse ${other}`,
+        description: `${product.name}: warehouse ${warehouse} has no more stock`,
       });
-      return;
     }
     setItems((prev) => {
-      const existing = prev.findIndex((i) => i.product_id === product.id);
+      const existing = prev.findIndex((i) => i.product_id === product.id && i.warehouse === lineWh);
       if (existing >= 0) {
         const next = [...prev];
         const qty = next[existing].quantity + 1;
@@ -741,6 +827,7 @@ const Invoices = () => {
           quantity: 1,
           unit_price: price,
           subtotal: price,
+          warehouse: lineWh,
         },
       ];
     });
@@ -843,28 +930,19 @@ const Invoices = () => {
     const next = [...items];
     const safe = Number.isFinite(value) && value >= 0 ? value : 0;
     if (field === "quantity") {
-      const product = products.find((p) => p.id === next[index].product_id);
+      const line = next[index];
+      const product = products.find((p) => p.id === line.product_id);
       let qty = Math.max(1, Math.floor(safe) || 1);
       if (product) {
-        const whStock =
-          warehouse === "B"
-            ? Number(product.stock_quantity_b ?? 0)
-            : Number(product.stock_quantity ?? 0);
-        // Other lines of same product (if any) + this line's new qty cannot exceed available.
-        const others = items.reduce(
-          (sum, item, i) =>
-            i !== index && item.product_id === next[index].product_id ? sum + item.quantity : sum,
-          0
-        );
+        // Other lines of this product in the same warehouse share its stock.
         const maxForLine = Math.max(
           1,
-          (editingInvoiceId ? whStock + (itemQtyByProduct.get(next[index].product_id) || 0) : whStock) -
-            others
+          capacityFor(product, line.warehouse) - qtyOnInvoice(line.product_id, line.warehouse, index)
         );
         if (qty > maxForLine) {
           toast({
             title: "Not enough stock",
-            description: `${next[index].product_name}: only ${maxForLine} available in warehouse ${warehouse}`,
+            description: `${line.product_name}: only ${maxForLine} available in warehouse ${line.warehouse}`,
             variant: "destructive",
           });
           qty = maxForLine;
@@ -876,6 +954,37 @@ const Invoices = () => {
     }
     next[index].subtotal = next[index].quantity * next[index].unit_price;
     setItems(next);
+  };
+
+  const changeLineWarehouse = (index: number, wh: WarehouseCode) => {
+    const line = items[index];
+    if (!line || line.warehouse === wh) return;
+    const product = products.find((p) => p.id === line.product_id);
+    if (!product) {
+      setItems(items.map((item, i) => (i === index ? { ...item, warehouse: wh } : item)));
+      return;
+    }
+    const room = capacityFor(product, wh) - qtyOnInvoice(line.product_id, wh, index);
+    if (room <= 0) {
+      toast({
+        title: "Not enough stock",
+        description: `${line.product_name}: none available in warehouse ${wh}`,
+        variant: "destructive",
+      });
+      return;
+    }
+    const qty = Math.min(line.quantity, room);
+    if (qty < line.quantity) {
+      toast({
+        title: "Quantity reduced",
+        description: `${line.product_name}: only ${room} available in warehouse ${wh}`,
+      });
+    }
+    setItems(
+      items.map((item, i) =>
+        i === index ? { ...item, warehouse: wh, quantity: qty, subtotal: qty * item.unit_price } : item
+      )
+    );
   };
 
   const enqueueCurrentCreate = () => {
@@ -911,6 +1020,7 @@ const Invoices = () => {
           quantity: item.quantity,
           unit_price: item.unit_price,
           subtotal: item.subtotal,
+          warehouse: item.warehouse,
         })),
       payments,
     });
@@ -974,6 +1084,7 @@ const Invoices = () => {
             quantity: item.quantity,
             unit_price: item.unit_price,
             subtotal: item.subtotal,
+            warehouse: item.warehouse,
           })),
         discount_amount: discount,
         notes: notes.trim() || null,
@@ -1052,6 +1163,7 @@ const Invoices = () => {
               quantity: item.quantity,
               unit_price: item.unit_price,
               subtotal: item.subtotal,
+              warehouse: item.warehouse,
             })),
           discount_amount: discount,
           notes: notes.trim() || null,
@@ -1146,7 +1258,9 @@ const Invoices = () => {
       setItems((prev) => {
         const next = [...prev];
         for (const sug of data.items) {
-          const idx = next.findIndex((i) => i.product_id === sug.product_id);
+          const idx = next.findIndex(
+            (i) => i.product_id === sug.product_id && i.warehouse === warehouse
+          );
           const qty = Math.max(1, Math.floor(Number(sug.quantity) || 1));
           const price = Number(sug.unit_price) || 0;
           if (idx >= 0) {
@@ -1164,6 +1278,7 @@ const Invoices = () => {
               quantity: qty,
               unit_price: price,
               subtotal: qty * price,
+              warehouse,
             });
           }
         }
@@ -1641,11 +1756,11 @@ const Invoices = () => {
                 />
               </div>
               <div className="space-y-2 min-w-0">
-                <Label>Warehouse</Label>
+                <Label>{canPickWarehouse ? "Default warehouse" : "Warehouse"}</Label>
                 <Select
                   value={warehouse}
                   onValueChange={(v) => setWarehouse(v as "A" | "B")}
-                  disabled={!canPickWarehouse || Boolean(editingInvoiceId)}
+                  disabled={!canPickWarehouse}
                 >
                   <SelectTrigger className="w-full">
                     <SelectValue />
@@ -1655,6 +1770,11 @@ const Invoices = () => {
                     <SelectItem value="B">Warehouse B</SelectItem>
                   </SelectContent>
                 </Select>
+                {canPickWarehouse && (
+                  <p className="text-xs text-muted-foreground">
+                    New products start here. Switch A/B on any line below.
+                  </p>
+                )}
               </div>
             </div>
 
@@ -1884,7 +2004,11 @@ const Invoices = () => {
                 ) : (
                   filteredCreateProducts.map((product) => {
                     const qty = itemQtyByProduct.get(product.id) || 0;
-                    const stock = stockAvailableForProduct(product);
+                    const stockA = capacityFor(product, "A");
+                    const stockB = capacityFor(product, "B");
+                    const stock = canPickWarehouse
+                      ? stockA + stockB
+                      : capacityFor(product, warehouse);
                     const outOfStock = stock <= 0;
                     return (
                       <button
@@ -1909,7 +2033,7 @@ const Invoices = () => {
                             {product.category}
                             {product.subcategory ? ` · ${product.subcategory}` : ""}
                             {` · $${Number(product.price).toFixed(2)}`}
-                            {` · Stock ${stock}`}
+                            {!canPickWarehouse && ` · Stock ${stock}`}
                           </p>
                         </div>
                         <div className="flex items-center gap-2 shrink-0">
@@ -1923,7 +2047,7 @@ const Invoices = () => {
                                   : "text-muted-foreground"
                             )}
                           >
-                            {stock}
+                            {canPickWarehouse ? `A: ${stockA} · B: ${stockB}` : stock}
                           </span>
                           {qty > 0 ? (
                             <Badge className="shrink-0">{qty}</Badge>
@@ -1942,22 +2066,30 @@ const Invoices = () => {
               <>
                 {/* Mobile line items — no horizontal scroll */}
                 <div className="md:hidden space-y-2 min-w-0">
-                  {items.map((item, index) => (
-                    <div key={`${item.product_id}-${index}`} className="rounded-md border p-3 space-y-2">
+                  {items.map((item, index) => {
+                    const product = products.find((p) => p.id === item.product_id);
+                    return (
+                    <div key={`${item.product_id}-${item.warehouse}-${index}`} className="rounded-md border p-3 space-y-2">
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0">
                           <p className="font-mono text-sm font-semibold">{item.product_sku || "—"}</p>
                           <p className="text-sm truncate">{item.product_name}</p>
-                          {(() => {
-                            const product = products.find((p) => p.id === item.product_id);
-                            if (!product) return null;
-                            const stock = stockAvailableForProduct(product);
-                            return (
+                          {canPickWarehouse ? (
+                            <div className="mt-1">
+                              <WarehouseToggle
+                                value={item.warehouse}
+                                onChange={(wh) => changeLineWarehouse(index, wh)}
+                                stockA={product ? capacityFor(product, "A") : null}
+                                stockB={product ? capacityFor(product, "B") : null}
+                              />
+                            </div>
+                          ) : (
+                            product && (
                               <p className="text-xs text-muted-foreground">
-                                Stock {stock} (WH {warehouse})
+                                Stock {capacityFor(product, item.warehouse)} (WH {item.warehouse})
                               </p>
-                            );
-                          })()}
+                            )
+                          )}
                         </div>
                         <Button
                           variant="ghost"
@@ -1995,7 +2127,8 @@ const Invoices = () => {
                         Subtotal ${item.subtotal.toFixed(2)}
                       </p>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
 
                 {/* Desktop table */}
@@ -2005,7 +2138,7 @@ const Invoices = () => {
                       <TableRow>
                         <TableHead>SKU</TableHead>
                         <TableHead>Flavor</TableHead>
-                        <TableHead className="w-20">Stock</TableHead>
+                        {!canPickWarehouse && <TableHead className="w-20">Stock</TableHead>}
                         <TableHead className="w-24">Qty</TableHead>
                         <TableHead className="w-28">Price</TableHead>
                         <TableHead className="w-28">Subtotal</TableHead>
@@ -2015,25 +2148,39 @@ const Invoices = () => {
                     <TableBody>
                       {items.map((item, index) => {
                         const product = products.find((p) => p.id === item.product_id);
-                        const stock = product ? stockAvailableForProduct(product) : null;
+                        const stock = product ? capacityFor(product, item.warehouse) : null;
                         return (
-                        <TableRow key={`${item.product_id}-${index}`}>
+                        <TableRow key={`${item.product_id}-${item.warehouse}-${index}`}>
                           <TableCell className="font-mono text-sm">
                             {item.product_sku || "-"}
                           </TableCell>
-                          <TableCell>{item.product_name}</TableCell>
-                          <TableCell
-                            className={cn(
-                              "tabular-nums text-sm",
-                              stock != null && stock <= 0
-                                ? "text-destructive"
-                                : stock != null && stock <= 10
-                                  ? "text-amber-600 dark:text-amber-500"
-                                  : "text-muted-foreground"
+                          <TableCell>
+                            <div>{item.product_name}</div>
+                            {canPickWarehouse && (
+                              <div className="mt-1">
+                                <WarehouseToggle
+                                  value={item.warehouse}
+                                  onChange={(wh) => changeLineWarehouse(index, wh)}
+                                  stockA={product ? capacityFor(product, "A") : null}
+                                  stockB={product ? capacityFor(product, "B") : null}
+                                />
+                              </div>
                             )}
-                          >
-                            {stock ?? "—"}
                           </TableCell>
+                          {!canPickWarehouse && (
+                            <TableCell
+                              className={cn(
+                                "tabular-nums text-sm",
+                                stock != null && stock <= 0
+                                  ? "text-destructive"
+                                  : stock != null && stock <= 10
+                                    ? "text-amber-600 dark:text-amber-500"
+                                    : "text-muted-foreground"
+                              )}
+                            >
+                              {stock ?? "—"}
+                            </TableCell>
+                          )}
                           <TableCell>
                             <Input
                               type="number"
@@ -2338,6 +2485,7 @@ const Invoices = () => {
                     <TableHeader>
                       <TableRow>
                         <TableHead>Item</TableHead>
+                        {canPickWarehouse && <TableHead>WH</TableHead>}
                         <TableHead>Qty</TableHead>
                         <TableHead className="text-right">Subtotal</TableHead>
                       </TableRow>
@@ -2346,6 +2494,9 @@ const Invoices = () => {
                       {(viewInvoice.items || []).map((item, idx) => (
                         <TableRow key={item.id || `${item.product_id}-${idx}`}>
                           <TableCell>{item.product_name}</TableCell>
+                          {canPickWarehouse && (
+                            <TableCell>{item.warehouse || viewInvoice.warehouse || "A"}</TableCell>
+                          )}
                           <TableCell>{item.quantity}</TableCell>
                           <TableCell className="text-right">
                             ${Number(item.subtotal).toFixed(2)}

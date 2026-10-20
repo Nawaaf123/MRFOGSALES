@@ -200,6 +200,8 @@ class InvoiceItemIn(BaseModel):
     quantity: int = Field(ge=1)
     unit_price: float
     subtotal: float
+    # Only admin/srour may choose; sales lines always use the invoice warehouse.
+    warehouse: WarehouseCode | None = None
 
 
 class PaymentIn(BaseModel):
@@ -237,6 +239,7 @@ class InvoiceItemOut(ORMModel):
     quantity: int
     unit_price: float
     subtotal: float
+    warehouse: WarehouseCode | None = None
 
 
 class PaymentOut(ORMModel):

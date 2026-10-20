@@ -19,6 +19,7 @@ export type InvoiceSyncQueueItem = {
     quantity: number;
     unit_price: number;
     subtotal: number;
+    warehouse?: "A" | "B";
   }>;
   payments: Array<{ amount: number; payment_method: InvoiceSyncPaymentMethod }>;
   total_amount: number;
@@ -168,6 +169,7 @@ export function queueItemToCreateBody(item: InvoiceSyncQueueItem) {
       quantity: row.quantity,
       unit_price: row.unit_price,
       subtotal: row.subtotal,
+      warehouse: row.warehouse ?? item.warehouse,
     })),
     discount_amount: item.discount_amount,
     notes: item.notes,
