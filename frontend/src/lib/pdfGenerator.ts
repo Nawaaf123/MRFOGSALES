@@ -47,6 +47,14 @@ export const generateInvoicePDF = async (invoice: InvoiceData, totalPaid: number
 
   const doc = new jsPDF();
   const pageWidth = doc.internal.pageSize.width;
+  const pageHeight = doc.internal.pageSize.height;
+  // Content stops here so it never runs into the footer.
+  const contentBottom = pageHeight - 22;
+  const ensureSpace = (y: number, needed: number) => {
+    if (y + needed <= contentBottom) return y;
+    doc.addPage();
+    return 20;
+  };
   
   // Neutral Colors
   const primaryColor: [number, number, number] = [51, 51, 51]; // Dark gray
@@ -143,8 +151,9 @@ export const generateInvoicePDF = async (invoice: InvoiceData, totalPaid: number
     },
     styles: {
       fontSize: 9,
-      cellPadding: 4
+      cellPadding: 3
     },
+    margin: { bottom: pageHeight - contentBottom },
     columnStyles: {
       0: { cellWidth: 28 },
       1: { cellWidth: "auto" },
@@ -159,11 +168,12 @@ export const generateInvoicePDF = async (invoice: InvoiceData, totalPaid: number
   // Payment Summary Box
   const boxX = pageWidth - 75;
   const boxWidth = 60;
-  let boxY = yPos;
   
   const discount = Number(invoice.discount_amount) || 0;
   const subtotal = Number(invoice.total_amount) + discount;
-  const boxHeight = discount > 0 ? 43 : 35;
+  const boxHeight = discount > 0 ? 51 : 35;
+  yPos = ensureSpace(yPos, boxHeight);
+  const boxY = yPos;
   
   doc.setFillColor(245, 245, 245);
   doc.rect(boxX, boxY, boxWidth, boxHeight, "F");
@@ -232,6 +242,8 @@ export const generateInvoicePDF = async (invoice: InvoiceData, totalPaid: number
   
   // Payment History
   if (invoice.payments && invoice.payments.length > 0) {
+    // Heading plus the table header and first row stay together.
+    yPos = ensureSpace(yPos, 22);
     doc.setTextColor(...darkColor);
     doc.setFont("helvetica", "bold");
     doc.setFontSize(11);
@@ -259,12 +271,13 @@ export const generateInvoicePDF = async (invoice: InvoiceData, totalPaid: number
         fontSize: 8,
         cellPadding: 3
       },
+      margin: { bottom: pageHeight - contentBottom },
       columnStyles: {
         0: { cellWidth: 40 },
         1: { halign: "right", cellWidth: 25 },
         2: { halign: "center", cellWidth: 25 },
         3: { halign: "center", cellWidth: 25 },
-        4: { cellWidth: 65 }
+        4: { cellWidth: "auto" }
       }
     });
     
@@ -273,10 +286,10 @@ export const generateInvoicePDF = async (invoice: InvoiceData, totalPaid: number
   
   // Notes
   if (invoice.notes) {
-    if (yPos > 250) {
-      doc.addPage();
-      yPos = 20;
-    }
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(9);
+    const splitNotes: string[] = doc.splitTextToSize(invoice.notes, pageWidth - 30);
+    yPos = ensureSpace(yPos, 5 + Math.min(splitNotes.length, 6) * 5);
     
     doc.setTextColor(...darkColor);
     doc.setFont("helvetica", "bold");
@@ -286,16 +299,26 @@ export const generateInvoicePDF = async (invoice: InvoiceData, totalPaid: number
     
     doc.setFont("helvetica", "normal");
     doc.setFontSize(9);
-    const splitNotes = doc.splitTextToSize(invoice.notes, pageWidth - 30);
-    doc.text(splitNotes, 15, yPos);
-    yPos += splitNotes.length * 5;
+    for (const line of splitNotes) {
+      yPos = ensureSpace(yPos, 5);
+      doc.text(line, 15, yPos);
+      yPos += 5;
+    }
   }
   
-  // Footer
-  const footerY = doc.internal.pageSize.height - 20;
-  doc.setFontSize(8);
-  doc.setTextColor(128, 128, 128);
-  doc.text("Thank you for your business!", pageWidth / 2, footerY, { align: "center" });
+  // Footer on every page
+  const pageCount = doc.getNumberOfPages();
+  for (let page = 1; page <= pageCount; page++) {
+    doc.setPage(page);
+    const footerY = pageHeight - 12;
+    doc.setFont("helvetica", "normal");
+    doc.setFontSize(8);
+    doc.setTextColor(128, 128, 128);
+    doc.text("Thank you for your business!", pageWidth / 2, footerY, { align: "center" });
+    if (pageCount > 1) {
+      doc.text(`${invoice.invoice_number} - Page ${page} of ${pageCount}`, pageWidth - 15, footerY, { align: "right" });
+    }
+  }
   
   return doc;
 };
