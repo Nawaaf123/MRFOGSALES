@@ -2485,6 +2485,7 @@ const Invoices = () => {
                   <Table>
                     <TableHeader>
                       <TableRow>
+                        <TableHead>SKU</TableHead>
                         <TableHead>Item</TableHead>
                         {canPickWarehouse && <TableHead>WH</TableHead>}
                         <TableHead>Qty</TableHead>
@@ -2494,6 +2495,9 @@ const Invoices = () => {
                     <TableBody>
                       {(viewInvoice.items || []).map((item, idx) => (
                         <TableRow key={item.id || `${item.product_id}-${idx}`}>
+                          <TableCell className="font-mono text-xs whitespace-nowrap">
+                            {item.product_sku || "-"}
+                          </TableCell>
                           <TableCell>{item.product_name}</TableCell>
                           {canPickWarehouse && (
                             <TableCell>{item.warehouse || viewInvoice.warehouse || "A"}</TableCell>
