@@ -110,6 +110,10 @@ def next_invoice_number(db: Session) -> str:
     Only considers plain INV-###### numbers. Legacy migrated numbers like
     INV-YYYY-###### sort higher as text and must be ignored, otherwise every
     create keeps proposing the same colliding INV-00NNNN.
+
+    The counter row only moves forward, so a deleted invoice's number is never
+    handed out again. It updates in the caller's transaction, so a failed
+    create does not leave a gap.
     """
     db.execute(text("SELECT pg_advisory_xact_lock(:k)"), {"k": _INVOICE_NUMBER_LOCK})
     last = db.execute(
@@ -118,10 +122,18 @@ def next_invoice_number(db: Session) -> str:
             "WHERE invoice_number ~ '^INV-[0-9]{6}$'"
         )
     ).scalar()
-    if not last:
-        n = 1
-    else:
-        n = int(str(last).rsplit("-", 1)[-1]) + 1
+    highest_existing = int(str(last).rsplit("-", 1)[-1]) if last else 0
+    last_issued = db.execute(
+        text("SELECT last_value FROM invoice_number_counter WHERE id = 1 FOR UPDATE")
+    ).scalar()
+    n = max(highest_existing, int(last_issued or 0)) + 1
+    db.execute(
+        text(
+            "INSERT INTO invoice_number_counter (id, last_value) VALUES (1, :n) "
+            "ON CONFLICT (id) DO UPDATE SET last_value = EXCLUDED.last_value"
+        ),
+        {"n": n},
+    )
     return f"INV-{n:06d}"
 
 
@@ -530,11 +542,19 @@ def update_invoice(
 def delete_invoice(
     invoice_id: UUID,
     db: Session = Depends(get_db),
-    _: User = Depends(require_roles(AppRole.admin)),
+    current_user: User = Depends(require_roles(AppRole.admin, AppRole.srour)),
 ) -> None:
     invoice = load_invoice(db, invoice_id)
     if not invoice:
         raise HTTPException(status_code=404, detail="Invoice not found")
+    if _user_role(current_user) == AppRole.srour and invoice.payment_status not in (
+        PaymentStatus.unpaid,
+        PaymentStatus.partial,
+    ):
+        raise HTTPException(
+            status_code=403,
+            detail="Only unpaid or partially paid invoices can be deleted",
+        )
 
     product_ids = [item.product_id for item in (invoice.items or []) if item.product_id]
     if product_ids:

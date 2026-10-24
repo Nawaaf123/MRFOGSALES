@@ -61,7 +61,7 @@ interface ShopInvoiceGroupProps {
     totalPending: number
   ) => void;
   canManage: boolean;
-  canDelete: boolean;
+  canDelete: boolean | ((invoice: ShopGroupInvoice) => boolean);
   canEditInvoice?: (invoice: ShopGroupInvoice) => boolean;
   profiles?: { id: string; full_name: string }[];
   onRefetch?: () => void;
@@ -149,6 +149,7 @@ export const ShopInvoiceGroup = ({
     const pending = pendingOf(invoice);
     const btnClass = outline ? "h-10 min-w-10 flex-1 sm:flex-none" : "h-8 w-8 p-0";
     const showEdit = Boolean(canEditInvoice?.(invoice) && onEditInvoice);
+    const showDelete = typeof canDelete === "function" ? canDelete(invoice) : canDelete;
 
     if (invoice.local_sync) {
       return (
@@ -247,7 +248,7 @@ export const ShopInvoiceGroup = ({
             {outline && <span className="ml-1 sm:hidden text-xs">Email</span>}
           </Button>
         )}
-        {canDelete && (
+        {showDelete && (
           <Button
             variant={variant}
             size="sm"

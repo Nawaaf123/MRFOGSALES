@@ -283,7 +283,13 @@ const Invoices = () => {
   const canPickWarehouse = user?.role === "admin" || user?.role === "srour";
   const isAdmin = user?.role === "admin";
   const isSrour = user?.role === "srour";
-  const canDeleteInvoice = user?.role === "admin";
+  const canDeleteInvoice = (inv: { local_sync?: string; payment_status?: PaymentStatus }) => {
+    if (inv.local_sync) return false;
+    if (user?.role === "admin") return true;
+    return (
+      user?.role === "srour" && (inv.payment_status === "unpaid" || inv.payment_status === "partial")
+    );
+  };
   const canEditSameDay = canCreate;
 
   const [search, setSearch] = useState("");
@@ -336,6 +342,7 @@ const Invoices = () => {
   const [creditInvoice, setCreditInvoice] = useState<Invoice | null>(null);
   const [viewInvoice, setViewInvoice] = useState<Invoice | null>(null);
   const [deleteInvoice, setDeleteInvoice] = useState<Invoice | null>(null);
+  const [deleteConfirmStep, setDeleteConfirmStep] = useState<1 | 2>(1);
   const [emailingId, setEmailingId] = useState<string | null>(null);
 
   const [distributeTarget, setDistributeTarget] = useState<{
@@ -1360,6 +1367,7 @@ const Invoices = () => {
       queryClient.invalidateQueries({ queryKey: ["products"] });
       queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
       setDeleteInvoice(null);
+      setDeleteConfirmStep(1);
       toast({ title: "Invoice deleted" });
     },
     onError: (error: ApiError) => {
@@ -2622,23 +2630,57 @@ const Invoices = () => {
         </DialogContent>
       </Dialog>
 
-      <AlertDialog open={!!deleteInvoice} onOpenChange={(open) => !open && setDeleteInvoice(null)}>
+      <AlertDialog
+        open={!!deleteInvoice}
+        onOpenChange={(open) => {
+          if (!open) {
+            setDeleteInvoice(null);
+            setDeleteConfirmStep(1);
+          }
+        }}
+      >
         <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete invoice?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This permanently deletes {deleteInvoice?.invoice_number} and its payments. This cannot
-              be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
+          {deleteConfirmStep === 1 ? (
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete invoice {deleteInvoice?.invoice_number}?</AlertDialogTitle>
+              <AlertDialogDescription>
+                {deleteInvoice?.shop?.name ? `${deleteInvoice.shop.name} · ` : ""}
+                Total ${Number(deleteInvoice?.total_amount || 0).toFixed(2)}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+          ) : (
+            <AlertDialogHeader>
+              <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This permanently deletes {deleteInvoice?.invoice_number}
+                {Number(deleteInvoice?.amount_paid || 0) > 0
+                  ? ` and its $${Number(deleteInvoice?.amount_paid || 0).toFixed(2)} in payments`
+                  : ""}
+                . Its products go back into stock. This cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+          )}
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel disabled={deleteMutation.isPending}>Cancel</AlertDialogCancel>
             <AlertDialogAction
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               disabled={deleteMutation.isPending || !deleteInvoice}
-              onClick={() => deleteInvoice && deleteMutation.mutate(deleteInvoice)}
+              onClick={(e) => {
+                // Keep the dialog open: step 1 advances to step 2, step 2 closes on success.
+                e.preventDefault();
+                if (!deleteInvoice) return;
+                if (deleteConfirmStep === 1) {
+                  setDeleteConfirmStep(2);
+                  return;
+                }
+                deleteMutation.mutate(deleteInvoice);
+              }}
             >
-              {deleteMutation.isPending ? "Deleting..." : "Delete"}
+              {deleteMutation.isPending
+                ? "Deleting..."
+                : deleteConfirmStep === 1
+                  ? "Delete"
+                  : "Yes, delete"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
