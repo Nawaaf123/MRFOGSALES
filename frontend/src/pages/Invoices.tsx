@@ -96,9 +96,11 @@ type Product = {
   sku?: string | null;
   barcode?: string | null;
   price: number;
-  is_active: boolean;
+  is_active?: boolean;
   category: string;
   subcategory?: string | null;
+  stock_quantity?: number;
+  stock_quantity_b?: number;
 };
 
 type UserProfile = {
@@ -116,6 +118,8 @@ type InvoicePayment = {
   payment_date: string;
 };
 
+type WarehouseCode = "A" | "B";
+
 type InvoiceItem = {
   id?: string;
   product_id: string;
@@ -123,6 +127,8 @@ type InvoiceItem = {
   quantity: number;
   unit_price: number;
   subtotal: number;
+  warehouse?: WarehouseCode | null;
+  product_sku?: string | null;
 };
 
 type InvoiceShop = {
@@ -198,10 +204,58 @@ type LineItemDraft = {
   quantity: number;
   unit_price: number;
   subtotal: number;
+  warehouse: WarehouseCode;
 };
 
 function skuSortKey(sku: string | null | undefined) {
   return (sku || "").trim().toLowerCase();
+}
+
+function warehouseStock(product: Product, wh: WarehouseCode) {
+  return wh === "B" ? Number(product.stock_quantity_b ?? 0) : Number(product.stock_quantity ?? 0);
+}
+
+function otherWarehouse(wh: WarehouseCode): WarehouseCode {
+  return wh === "A" ? "B" : "A";
+}
+
+const lineKey = (productId: string, wh: WarehouseCode) => `${productId}|${wh}`;
+
+function WarehouseToggle({
+  value,
+  onChange,
+  stockA,
+  stockB,
+}: {
+  value: WarehouseCode;
+  onChange: (wh: WarehouseCode) => void;
+  stockA: number | null;
+  stockB: number | null;
+}) {
+  return (
+    <div className="inline-flex rounded-md border p-0.5" role="group" aria-label="Warehouse">
+      {(["A", "B"] as const).map((wh) => {
+        const stock = wh === "A" ? stockA : stockB;
+        return (
+          <button
+            key={wh}
+            type="button"
+            onClick={() => onChange(wh)}
+            aria-pressed={value === wh}
+            className={cn(
+              "h-8 min-w-12 rounded px-2 text-xs font-medium tabular-nums transition-colors",
+              value === wh
+                ? "bg-primary text-primary-foreground"
+                : "text-muted-foreground hover:bg-muted"
+            )}
+          >
+            {wh}
+            {stock != null && <span className="ml-1 opacity-80">{stock}</span>}
+          </button>
+        );
+      })}
+    </div>
+  );
 }
 
 const statusBadgeVariant = (status: PaymentStatus): "default" | "secondary" | "destructive" => {
@@ -226,9 +280,16 @@ const Invoices = () => {
   const { toast } = useToast();
   const queryClient = useQueryClient();
   const canCreate = user?.role === "admin" || user?.role === "sales" || user?.role === "srour";
-  const canPickWarehouse = user?.role === "admin";
+  const canPickWarehouse = user?.role === "admin" || user?.role === "srour";
   const isAdmin = user?.role === "admin";
-  const canDeleteInvoice = user?.role === "admin";
+  const isSrour = user?.role === "srour";
+  const canDeleteInvoice = (inv: { local_sync?: string; payment_status?: PaymentStatus }) => {
+    if (inv.local_sync) return false;
+    if (user?.role === "admin") return true;
+    return (
+      user?.role === "srour" && (inv.payment_status === "unpaid" || inv.payment_status === "partial")
+    );
+  };
   const canEditSameDay = canCreate;
 
   const [search, setSearch] = useState("");
@@ -258,6 +319,8 @@ const Invoices = () => {
   const [discountAmount, setDiscountAmount] = useState("");
   const [warehouse, setWarehouse] = useState<"A" | "B">(user?.assigned_warehouse || "A");
   const [items, setItems] = useState<LineItemDraft[]>([]);
+  // Quantities already saved on the invoice being edited; the API returns them to stock first.
+  const [originalQtyByKey, setOriginalQtyByKey] = useState<Map<string, number>>(() => new Map());
   const [productSearch, setProductSearch] = useState("");
   const [createCategoryFilter, setCreateCategoryFilter] = useState("all");
   const [createSubcategoryFilter, setCreateSubcategoryFilter] = useState("all");
@@ -279,6 +342,7 @@ const Invoices = () => {
   const [creditInvoice, setCreditInvoice] = useState<Invoice | null>(null);
   const [viewInvoice, setViewInvoice] = useState<Invoice | null>(null);
   const [deleteInvoice, setDeleteInvoice] = useState<Invoice | null>(null);
+  const [deleteConfirmStep, setDeleteConfirmStep] = useState<1 | 2>(1);
   const [emailingId, setEmailingId] = useState<string | null>(null);
 
   const [distributeTarget, setDistributeTarget] = useState<{
@@ -419,6 +483,20 @@ const Invoices = () => {
     return map;
   }, [items]);
 
+  /** Max qty this invoice may take from one warehouse (on edit, includes what it already holds there). */
+  const capacityFor = (product: Product, wh: WarehouseCode) =>
+    warehouseStock(product, wh) +
+    (editingInvoiceId ? originalQtyByKey.get(lineKey(product.id, wh)) || 0 : 0);
+
+  const qtyOnInvoice = (productId: string, wh: WarehouseCode, excludeIndex?: number) =>
+    items.reduce(
+      (sum, item, i) =>
+        i !== excludeIndex && item.product_id === productId && item.warehouse === wh
+          ? sum + item.quantity
+          : sum,
+      0
+    );
+
   const { data: profiles = [] } = useQuery({
     queryKey: ["users", "names-for-invoices"],
     queryFn: () => api<UserProfile[]>("/users/names"),
@@ -536,6 +614,7 @@ const Invoices = () => {
     setDiscountAmount("");
     setWarehouse(user?.assigned_warehouse || "A");
     setItems([]);
+    setOriginalQtyByKey(new Map());
     setProductSearch("");
     setCreateCategoryFilter("all");
     setCreateSubcategoryFilter("all");
@@ -556,12 +635,22 @@ const Invoices = () => {
     setSelectedShopName("");
     setNotes(draft.notes || "");
     setDiscountAmount(draft.discount_amount || "");
-    setWarehouse(draft.warehouse === "B" ? "B" : "A");
+    const draftWarehouse: WarehouseCode = draft.warehouse === "B" ? "B" : "A";
+    setWarehouse(draftWarehouse);
     setItems(
       Array.isArray(draft.items)
-        ? draft.items.filter((item) => isValidUuid(item.product_id))
+        ? draft.items
+            .filter((item) => isValidUuid(item.product_id))
+            .map((item) => ({
+              ...item,
+              warehouse:
+                canPickWarehouse && (item.warehouse === "A" || item.warehouse === "B")
+                  ? item.warehouse
+                  : draftWarehouse,
+            }))
         : []
     );
+    setOriginalQtyByKey(new Map());
     setProductSearch("");
     setCreateCategoryFilter("all");
     setCreateSubcategoryFilter("all");
@@ -589,22 +678,36 @@ const Invoices = () => {
     setCreateOpen(true);
   };
 
-  const canEditInvoiceRow = (inv: { local_sync?: string; created_at: string; invoice_number?: string }) => {
+  const canEditInvoiceRow = (inv: {
+    local_sync?: string;
+    created_at: string;
+    invoice_number?: string;
+    payment_status?: PaymentStatus;
+  }) => {
     if (!canEditSameDay) return false;
     if (inv.local_sync) return false;
     // Legacy opening-balance invoices have no editable product lines.
     if (inv.invoice_number?.startsWith("LEGACY") || inv.invoice_number?.includes("LEGACY")) return false;
     if (isAdmin) return true;
-    return isSameBusinessDay(inv.created_at);
+    if (isSameBusinessDay(inv.created_at)) return true;
+    return isSrour && (inv.payment_status === "unpaid" || inv.payment_status === "partial");
   };
 
-  const openEditInvoice = async (inv: { id: string; local_sync?: string; created_at: string; invoice_number: string }) => {
+  const openEditInvoice = async (inv: {
+    id: string;
+    local_sync?: string;
+    created_at: string;
+    invoice_number: string;
+    payment_status?: PaymentStatus;
+  }) => {
     if (!canEditInvoiceRow(inv)) {
       toast({
         title: "Cannot edit",
         description: isAdmin
           ? "This invoice cannot be edited."
-          : "Only invoices created today can be edited.",
+          : isSrour
+            ? "Paid invoices can only be edited on the day they were created."
+            : "Only invoices created today can be edited.",
         variant: "destructive",
       });
       return;
@@ -626,17 +729,25 @@ const Invoices = () => {
       setSelectedShopName(full.shop?.name || "");
       setNotes(full.notes || "");
       setDiscountAmount(full.discount_amount ? String(full.discount_amount) : "");
-      setWarehouse((full.warehouse as "A" | "B") || user?.assigned_warehouse || "A");
-      setItems(
-        full.items.map((item) => ({
-          product_id: item.product_id,
-          product_name: item.product_name,
-          product_sku: null,
-          quantity: item.quantity,
-          unit_price: Number(item.unit_price),
-          subtotal: Number(item.subtotal),
-        }))
-      );
+      const invoiceWarehouse: WarehouseCode =
+        (full.warehouse as WarehouseCode) || user?.assigned_warehouse || "A";
+      setWarehouse(invoiceWarehouse);
+      const loadedItems: LineItemDraft[] = full.items.map((item) => ({
+        product_id: item.product_id,
+        product_name: item.product_name,
+        product_sku: item.product_sku ?? null,
+        quantity: item.quantity,
+        unit_price: Number(item.unit_price),
+        subtotal: Number(item.subtotal),
+        warehouse: item.warehouse || invoiceWarehouse,
+      }));
+      const original = new Map<string, number>();
+      for (const item of loadedItems) {
+        const key = lineKey(item.product_id, item.warehouse);
+        original.set(key, (original.get(key) || 0) + item.quantity);
+      }
+      setOriginalQtyByKey(original);
+      setItems(loadedItems);
       setCashAmount("");
       setCheckAmount("");
       setCreditAmount("");
@@ -697,8 +808,28 @@ const Invoices = () => {
   ]);
 
   const addProductQuick = (product: Product) => {
+    const hasRoom = (wh: WarehouseCode) => qtyOnInvoice(product.id, wh) + 1 <= capacityFor(product, wh);
+    let lineWh: WarehouseCode = warehouse;
+    if (!hasRoom(lineWh)) {
+      const other = otherWarehouse(lineWh);
+      if (!canPickWarehouse || !hasRoom(other)) {
+        toast({
+          title: "Not enough stock",
+          description: canPickWarehouse
+            ? `${product.name}: none left in warehouse A or B`
+            : `${product.name}: only ${capacityFor(product, lineWh)} available in warehouse ${lineWh}`,
+          variant: "destructive",
+        });
+        return;
+      }
+      lineWh = other;
+      toast({
+        title: `Added from warehouse ${other}`,
+        description: `${product.name}: warehouse ${warehouse} has no more stock`,
+      });
+    }
     setItems((prev) => {
-      const existing = prev.findIndex((i) => i.product_id === product.id);
+      const existing = prev.findIndex((i) => i.product_id === product.id && i.warehouse === lineWh);
       if (existing >= 0) {
         const next = [...prev];
         const qty = next[existing].quantity + 1;
@@ -719,6 +850,7 @@ const Invoices = () => {
           quantity: 1,
           unit_price: price,
           subtotal: price,
+          warehouse: lineWh,
         },
       ];
     });
@@ -820,12 +952,62 @@ const Invoices = () => {
   const updateLine = (index: number, field: "quantity" | "unit_price", value: number) => {
     const next = [...items];
     const safe = Number.isFinite(value) && value >= 0 ? value : 0;
-    next[index] = {
-      ...next[index],
-      [field]: field === "quantity" ? Math.max(1, Math.floor(safe) || 1) : safe,
-    };
+    if (field === "quantity") {
+      const line = next[index];
+      const product = products.find((p) => p.id === line.product_id);
+      let qty = Math.max(1, Math.floor(safe) || 1);
+      if (product) {
+        // Other lines of this product in the same warehouse share its stock.
+        const maxForLine = Math.max(
+          1,
+          capacityFor(product, line.warehouse) - qtyOnInvoice(line.product_id, line.warehouse, index)
+        );
+        if (qty > maxForLine) {
+          toast({
+            title: "Not enough stock",
+            description: `${line.product_name}: only ${maxForLine} available in warehouse ${line.warehouse}`,
+            variant: "destructive",
+          });
+          qty = maxForLine;
+        }
+      }
+      next[index] = { ...next[index], quantity: qty };
+    } else {
+      next[index] = { ...next[index], unit_price: safe };
+    }
     next[index].subtotal = next[index].quantity * next[index].unit_price;
     setItems(next);
+  };
+
+  const changeLineWarehouse = (index: number, wh: WarehouseCode) => {
+    const line = items[index];
+    if (!line || line.warehouse === wh) return;
+    const product = products.find((p) => p.id === line.product_id);
+    if (!product) {
+      setItems(items.map((item, i) => (i === index ? { ...item, warehouse: wh } : item)));
+      return;
+    }
+    const room = capacityFor(product, wh) - qtyOnInvoice(line.product_id, wh, index);
+    if (room <= 0) {
+      toast({
+        title: "Not enough stock",
+        description: `${line.product_name}: none available in warehouse ${wh}`,
+        variant: "destructive",
+      });
+      return;
+    }
+    const qty = Math.min(line.quantity, room);
+    if (qty < line.quantity) {
+      toast({
+        title: "Quantity reduced",
+        description: `${line.product_name}: only ${room} available in warehouse ${wh}`,
+      });
+    }
+    setItems(
+      items.map((item, i) =>
+        i === index ? { ...item, warehouse: wh, quantity: qty, subtotal: qty * item.unit_price } : item
+      )
+    );
   };
 
   const enqueueCurrentCreate = () => {
@@ -861,6 +1043,7 @@ const Invoices = () => {
           quantity: item.quantity,
           unit_price: item.unit_price,
           subtotal: item.subtotal,
+          warehouse: item.warehouse,
         })),
       payments,
     });
@@ -924,6 +1107,7 @@ const Invoices = () => {
             quantity: item.quantity,
             unit_price: item.unit_price,
             subtotal: item.subtotal,
+            warehouse: item.warehouse,
           })),
         discount_amount: discount,
         notes: notes.trim() || null,
@@ -1002,6 +1186,7 @@ const Invoices = () => {
               quantity: item.quantity,
               unit_price: item.unit_price,
               subtotal: item.subtotal,
+              warehouse: item.warehouse,
             })),
           discount_amount: discount,
           notes: notes.trim() || null,
@@ -1096,7 +1281,9 @@ const Invoices = () => {
       setItems((prev) => {
         const next = [...prev];
         for (const sug of data.items) {
-          const idx = next.findIndex((i) => i.product_id === sug.product_id);
+          const idx = next.findIndex(
+            (i) => i.product_id === sug.product_id && i.warehouse === warehouse
+          );
           const qty = Math.max(1, Math.floor(Number(sug.quantity) || 1));
           const price = Number(sug.unit_price) || 0;
           if (idx >= 0) {
@@ -1114,6 +1301,7 @@ const Invoices = () => {
               quantity: qty,
               unit_price: price,
               subtotal: qty * price,
+              warehouse,
             });
           }
         }
@@ -1176,7 +1364,10 @@ const Invoices = () => {
       api(`/invoices/${invoice.id}`, { method: "DELETE" }),
     onSuccess: () => {
       refetchInvoices();
+      queryClient.invalidateQueries({ queryKey: ["products"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
       setDeleteInvoice(null);
+      setDeleteConfirmStep(1);
       toast({ title: "Invoice deleted" });
     },
     onError: (error: ApiError) => {
@@ -1589,11 +1780,11 @@ const Invoices = () => {
                 />
               </div>
               <div className="space-y-2 min-w-0">
-                <Label>Warehouse</Label>
+                <Label>{canPickWarehouse ? "Default warehouse" : "Warehouse"}</Label>
                 <Select
                   value={warehouse}
                   onValueChange={(v) => setWarehouse(v as "A" | "B")}
-                  disabled={!canPickWarehouse || Boolean(editingInvoiceId)}
+                  disabled={!canPickWarehouse}
                 >
                   <SelectTrigger className="w-full">
                     <SelectValue />
@@ -1603,6 +1794,11 @@ const Invoices = () => {
                     <SelectItem value="B">Warehouse B</SelectItem>
                   </SelectContent>
                 </Select>
+                {canPickWarehouse && (
+                  <p className="text-xs text-muted-foreground">
+                    New products start here. Switch A/B on any line below.
+                  </p>
+                )}
               </div>
             </div>
 
@@ -1832,14 +2028,22 @@ const Invoices = () => {
                 ) : (
                   filteredCreateProducts.map((product) => {
                     const qty = itemQtyByProduct.get(product.id) || 0;
+                    const stockA = capacityFor(product, "A");
+                    const stockB = capacityFor(product, "B");
+                    const stock = canPickWarehouse
+                      ? stockA + stockB
+                      : capacityFor(product, warehouse);
+                    const outOfStock = stock <= 0;
                     return (
                       <button
                         key={product.id}
                         type="button"
                         onClick={() => addProductQuick(product)}
+                        disabled={outOfStock && qty === 0}
                         className={cn(
                           "w-full max-w-full text-left px-3 py-2.5 min-h-11 flex items-center gap-2 hover:bg-muted/80 active:bg-muted transition-colors",
-                          qty > 0 && "bg-primary/5"
+                          qty > 0 && "bg-primary/5",
+                          outOfStock && qty === 0 && "opacity-50 cursor-not-allowed"
                         )}
                       >
                         <div className="min-w-0 flex-1 overflow-hidden">
@@ -1853,13 +2057,28 @@ const Invoices = () => {
                             {product.category}
                             {product.subcategory ? ` · ${product.subcategory}` : ""}
                             {` · $${Number(product.price).toFixed(2)}`}
+                            {!canPickWarehouse && ` · Stock ${stock}`}
                           </p>
                         </div>
-                        {qty > 0 ? (
-                          <Badge className="shrink-0">{qty}</Badge>
-                        ) : (
-                          <Plus className="h-4 w-4 shrink-0 text-muted-foreground" />
-                        )}
+                        <div className="flex items-center gap-2 shrink-0">
+                          <span
+                            className={cn(
+                              "text-xs font-medium tabular-nums",
+                              stock <= 0
+                                ? "text-destructive"
+                                : stock <= 10
+                                  ? "text-amber-600 dark:text-amber-500"
+                                  : "text-muted-foreground"
+                            )}
+                          >
+                            {canPickWarehouse ? `A: ${stockA} · B: ${stockB}` : stock}
+                          </span>
+                          {qty > 0 ? (
+                            <Badge className="shrink-0">{qty}</Badge>
+                          ) : (
+                            <Plus className="h-4 w-4 shrink-0 text-muted-foreground" />
+                          )}
+                        </div>
                       </button>
                     );
                   })
@@ -1871,12 +2090,30 @@ const Invoices = () => {
               <>
                 {/* Mobile line items — no horizontal scroll */}
                 <div className="md:hidden space-y-2 min-w-0">
-                  {items.map((item, index) => (
-                    <div key={`${item.product_id}-${index}`} className="rounded-md border p-3 space-y-2">
+                  {items.map((item, index) => {
+                    const product = products.find((p) => p.id === item.product_id);
+                    return (
+                    <div key={`${item.product_id}-${item.warehouse}-${index}`} className="rounded-md border p-3 space-y-2">
                       <div className="flex items-start justify-between gap-2">
                         <div className="min-w-0">
                           <p className="font-mono text-sm font-semibold">{item.product_sku || "—"}</p>
                           <p className="text-sm truncate">{item.product_name}</p>
+                          {canPickWarehouse ? (
+                            <div className="mt-1">
+                              <WarehouseToggle
+                                value={item.warehouse}
+                                onChange={(wh) => changeLineWarehouse(index, wh)}
+                                stockA={product ? capacityFor(product, "A") : null}
+                                stockB={product ? capacityFor(product, "B") : null}
+                              />
+                            </div>
+                          ) : (
+                            product && (
+                              <p className="text-xs text-muted-foreground">
+                                Stock {capacityFor(product, item.warehouse)} (WH {item.warehouse})
+                              </p>
+                            )
+                          )}
                         </div>
                         <Button
                           variant="ghost"
@@ -1914,7 +2151,8 @@ const Invoices = () => {
                         Subtotal ${item.subtotal.toFixed(2)}
                       </p>
                     </div>
-                  ))}
+                    );
+                  })}
                 </div>
 
                 {/* Desktop table */}
@@ -1924,6 +2162,7 @@ const Invoices = () => {
                       <TableRow>
                         <TableHead>SKU</TableHead>
                         <TableHead>Flavor</TableHead>
+                        {!canPickWarehouse && <TableHead className="w-20">Stock</TableHead>}
                         <TableHead className="w-24">Qty</TableHead>
                         <TableHead className="w-28">Price</TableHead>
                         <TableHead className="w-28">Subtotal</TableHead>
@@ -1931,16 +2170,46 @@ const Invoices = () => {
                       </TableRow>
                     </TableHeader>
                     <TableBody>
-                      {items.map((item, index) => (
-                        <TableRow key={`${item.product_id}-${index}`}>
+                      {items.map((item, index) => {
+                        const product = products.find((p) => p.id === item.product_id);
+                        const stock = product ? capacityFor(product, item.warehouse) : null;
+                        return (
+                        <TableRow key={`${item.product_id}-${item.warehouse}-${index}`}>
                           <TableCell className="font-mono text-sm">
                             {item.product_sku || "-"}
                           </TableCell>
-                          <TableCell>{item.product_name}</TableCell>
+                          <TableCell>
+                            <div>{item.product_name}</div>
+                            {canPickWarehouse && (
+                              <div className="mt-1">
+                                <WarehouseToggle
+                                  value={item.warehouse}
+                                  onChange={(wh) => changeLineWarehouse(index, wh)}
+                                  stockA={product ? capacityFor(product, "A") : null}
+                                  stockB={product ? capacityFor(product, "B") : null}
+                                />
+                              </div>
+                            )}
+                          </TableCell>
+                          {!canPickWarehouse && (
+                            <TableCell
+                              className={cn(
+                                "tabular-nums text-sm",
+                                stock != null && stock <= 0
+                                  ? "text-destructive"
+                                  : stock != null && stock <= 10
+                                    ? "text-amber-600 dark:text-amber-500"
+                                    : "text-muted-foreground"
+                              )}
+                            >
+                              {stock ?? "—"}
+                            </TableCell>
+                          )}
                           <TableCell>
                             <Input
                               type="number"
                               min="1"
+                              max={stock ?? undefined}
                               inputMode="numeric"
                               value={item.quantity}
                               onChange={(e) => updateLine(index, "quantity", Number(e.target.value))}
@@ -1969,7 +2238,8 @@ const Invoices = () => {
                             </Button>
                           </TableCell>
                         </TableRow>
-                      ))}
+                        );
+                      })}
                     </TableBody>
                   </Table>
                 </div>
@@ -2213,6 +2483,25 @@ const Invoices = () => {
                     "Saved on this device only. It will upload when you’re online. PDF/email after sync."}
                 </p>
               )}
+              {Number(viewInvoice.discount_amount || 0) > 0 && (
+                <div className="grid grid-cols-3 gap-3 rounded-md bg-muted/50 px-3 py-2">
+                  <div>
+                    <p className="text-muted-foreground text-xs">Subtotal</p>
+                    <p className="font-semibold">
+                      $
+                      {(
+                        Number(viewInvoice.total_amount) + Number(viewInvoice.discount_amount || 0)
+                      ).toFixed(2)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-muted-foreground text-xs">Discount</p>
+                    <p className="font-semibold text-green-600 dark:text-green-500">
+                      -${Number(viewInvoice.discount_amount).toFixed(2)}
+                    </p>
+                  </div>
+                </div>
+              )}
               <div className="grid grid-cols-3 gap-3">
                 <div>
                   <p className="text-muted-foreground text-xs">Total</p>
@@ -2238,7 +2527,9 @@ const Invoices = () => {
                   <Table>
                     <TableHeader>
                       <TableRow>
+                        <TableHead>SKU</TableHead>
                         <TableHead>Item</TableHead>
+                        {canPickWarehouse && <TableHead>WH</TableHead>}
                         <TableHead>Qty</TableHead>
                         <TableHead className="text-right">Subtotal</TableHead>
                       </TableRow>
@@ -2246,7 +2537,13 @@ const Invoices = () => {
                     <TableBody>
                       {(viewInvoice.items || []).map((item, idx) => (
                         <TableRow key={item.id || `${item.product_id}-${idx}`}>
+                          <TableCell className="font-mono text-xs whitespace-nowrap">
+                            {item.product_sku || "-"}
+                          </TableCell>
                           <TableCell>{item.product_name}</TableCell>
+                          {canPickWarehouse && (
+                            <TableCell>{item.warehouse || viewInvoice.warehouse || "A"}</TableCell>
+                          )}
                           <TableCell>{item.quantity}</TableCell>
                           <TableCell className="text-right">
                             ${Number(item.subtotal).toFixed(2)}
@@ -2333,23 +2630,57 @@ const Invoices = () => {
         </DialogContent>
       </Dialog>
 
-      <AlertDialog open={!!deleteInvoice} onOpenChange={(open) => !open && setDeleteInvoice(null)}>
+      <AlertDialog
+        open={!!deleteInvoice}
+        onOpenChange={(open) => {
+          if (!open) {
+            setDeleteInvoice(null);
+            setDeleteConfirmStep(1);
+          }
+        }}
+      >
         <AlertDialogContent>
-          <AlertDialogHeader>
-            <AlertDialogTitle>Delete invoice?</AlertDialogTitle>
-            <AlertDialogDescription>
-              This permanently deletes {deleteInvoice?.invoice_number} and its payments. This cannot
-              be undone.
-            </AlertDialogDescription>
-          </AlertDialogHeader>
+          {deleteConfirmStep === 1 ? (
+            <AlertDialogHeader>
+              <AlertDialogTitle>Delete invoice {deleteInvoice?.invoice_number}?</AlertDialogTitle>
+              <AlertDialogDescription>
+                {deleteInvoice?.shop?.name ? `${deleteInvoice.shop.name} · ` : ""}
+                Total ${Number(deleteInvoice?.total_amount || 0).toFixed(2)}
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+          ) : (
+            <AlertDialogHeader>
+              <AlertDialogTitle>Are you sure?</AlertDialogTitle>
+              <AlertDialogDescription>
+                This permanently deletes {deleteInvoice?.invoice_number}
+                {Number(deleteInvoice?.amount_paid || 0) > 0
+                  ? ` and its $${Number(deleteInvoice?.amount_paid || 0).toFixed(2)} in payments`
+                  : ""}
+                . Its products go back into stock. This cannot be undone.
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+          )}
           <AlertDialogFooter>
-            <AlertDialogCancel>Cancel</AlertDialogCancel>
+            <AlertDialogCancel disabled={deleteMutation.isPending}>Cancel</AlertDialogCancel>
             <AlertDialogAction
               className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
               disabled={deleteMutation.isPending || !deleteInvoice}
-              onClick={() => deleteInvoice && deleteMutation.mutate(deleteInvoice)}
+              onClick={(e) => {
+                // Keep the dialog open: step 1 advances to step 2, step 2 closes on success.
+                e.preventDefault();
+                if (!deleteInvoice) return;
+                if (deleteConfirmStep === 1) {
+                  setDeleteConfirmStep(2);
+                  return;
+                }
+                deleteMutation.mutate(deleteInvoice);
+              }}
             >
-              {deleteMutation.isPending ? "Deleting..." : "Delete"}
+              {deleteMutation.isPending
+                ? "Deleting..."
+                : deleteConfirmStep === 1
+                  ? "Delete"
+                  : "Yes, delete"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

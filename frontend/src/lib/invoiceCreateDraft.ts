@@ -7,6 +7,8 @@ export type InvoiceCreateDraftItem = {
   quantity: number;
   unit_price: number;
   subtotal: number;
+  /** Missing on drafts saved before per-line warehouses; falls back to the draft warehouse. */
+  warehouse?: "A" | "B";
 };
 
 export type InvoiceCreateDraft = {

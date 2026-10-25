@@ -17,9 +17,9 @@ import { useAuth } from "@/lib/auth";
 import { api, ApiError } from "@/lib/api";
 import { useToast } from "@/hooks/use-toast";
 import { cn } from "@/lib/utils";
+import { PageHero } from "@/components/ui/PageHero";
 import {
   CheckCircle2,
-  CircleDot,
   Clock,
   LifeBuoy,
   MessageSquareText,
@@ -146,34 +146,17 @@ const SupportTickets = () => {
   return (
     <>
       <div className="space-y-5">
-        {/* Hero band */}
-        <section className="relative overflow-hidden rounded-2xl border border-primary/15 bg-gradient-to-br from-primary/[0.12] via-white to-white px-4 py-5 sm:px-6 sm:py-6">
-          <div
-            aria-hidden
-            className="pointer-events-none absolute -right-10 -top-12 h-40 w-40 rounded-full bg-primary/20 blur-2xl"
-          />
-          <div
-            aria-hidden
-            className="pointer-events-none absolute -bottom-16 right-16 h-36 w-36 rounded-full bg-primary/10 blur-2xl"
-          />
-
-          <div className="relative flex flex-col gap-4 sm:flex-row sm:items-center sm:justify-between">
-            <div className="flex items-start gap-3">
-              <div className="flex h-12 w-12 shrink-0 items-center justify-center rounded-xl bg-primary text-primary-foreground shadow-sm shadow-primary/30">
-                <LifeBuoy className="h-6 w-6" />
-              </div>
-              <div>
-                <h1 className="text-2xl font-bold tracking-tight sm:text-3xl">Support</h1>
-                <p className="mt-1 max-w-md text-sm text-muted-foreground">
-                  {isAdmin
-                    ? "See what the team needs help with, then leave a clear resolution."
-                    : "Stuck on something? Send it here — we'll reply with a fix when ready."}
-                </p>
-              </div>
-            </div>
-
+        <PageHero
+          icon={LifeBuoy}
+          title="Support"
+          description={
+            isAdmin
+              ? "See what the team needs help with, then leave a clear resolution."
+              : "Stuck on something? Send it here — we'll reply with a fix when ready."
+          }
+          action={
             <Button
-              className="h-11 w-full shrink-0 shadow-sm shadow-primary/25 sm:w-auto"
+              className="h-11 w-full shadow-sm shadow-primary/25 sm:w-auto"
               onClick={() => {
                 setCreateForm(emptyCreate);
                 setCreateOpen(true);
@@ -182,25 +165,12 @@ const SupportTickets = () => {
               <Plus className="mr-2 h-4 w-4" />
               New request
             </Button>
-          </div>
-
-          <div className="relative mt-5 grid grid-cols-2 gap-3 sm:max-w-md">
-            <div className="rounded-xl border border-primary/10 bg-white/80 px-3 py-3 backdrop-blur-sm">
-              <div className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-primary">
-                <CircleDot className="h-3.5 w-3.5" />
-                Open
-              </div>
-              <p className="mt-1 text-2xl font-bold tabular-nums text-foreground">{openCount}</p>
-            </div>
-            <div className="rounded-xl border border-border bg-white/80 px-3 py-3 backdrop-blur-sm">
-              <div className="flex items-center gap-1.5 text-xs font-medium uppercase tracking-wide text-muted-foreground">
-                <CheckCircle2 className="h-3.5 w-3.5" />
-                Resolved
-              </div>
-              <p className="mt-1 text-2xl font-bold tabular-nums text-foreground">{resolvedCount}</p>
-            </div>
-          </div>
-        </section>
+          }
+          stats={[
+            { label: "Open", value: openCount, accent: true },
+            { label: "Resolved", value: resolvedCount },
+          ]}
+        />
 
         {/* Filters */}
         <div className="flex gap-2 overflow-x-auto pb-1">
@@ -220,7 +190,7 @@ const SupportTickets = () => {
               <span
                 className={cn(
                   "rounded-md px-1.5 py-0.5 text-xs tabular-nums",
-                  statusFilter === f.id ? "bg-white/20" : "bg-muted text-muted-foreground"
+                  statusFilter === f.id ? "bg-primary-foreground/20" : "bg-muted text-muted-foreground"
                 )}
               >
                 {f.count}

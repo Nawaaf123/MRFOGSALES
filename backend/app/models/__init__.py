@@ -178,6 +178,9 @@ class InvoiceItem(Base):
     quantity: Mapped[int] = mapped_column(default=1)
     unit_price: Mapped[float] = mapped_column(Numeric(12, 2))
     subtotal: Mapped[float] = mapped_column(Numeric(12, 2))
+    warehouse: Mapped[WarehouseCode | None] = mapped_column(
+        Enum(WarehouseCode, name="warehouse_code", create_type=False), nullable=True
+    )
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
 
     invoice: Mapped[Invoice] = relationship(back_populates="items")

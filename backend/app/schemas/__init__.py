@@ -118,6 +118,8 @@ class ProductBrief(ORMModel):
     category: str
     subcategory: str | None = None
     price: float
+    stock_quantity: int = 0
+    stock_quantity_b: int = 0
 
 
 class ShopCreate(BaseModel):
@@ -198,6 +200,8 @@ class InvoiceItemIn(BaseModel):
     quantity: int = Field(ge=1)
     unit_price: float
     subtotal: float
+    # Only admin/srour may choose; sales lines always use the invoice warehouse.
+    warehouse: WarehouseCode | None = None
 
 
 class PaymentIn(BaseModel):
@@ -235,6 +239,9 @@ class InvoiceItemOut(ORMModel):
     quantity: int
     unit_price: float
     subtotal: float
+    warehouse: WarehouseCode | None = None
+    # Product's current SKU (not stored on the line).
+    product_sku: str | None = None
 
 
 class PaymentOut(ORMModel):
@@ -309,6 +316,29 @@ class ProductBriefListPage(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class StockAdjustItem(BaseModel):
+    product_id: UUID
+    quantity: int = Field(ge=1)
+
+
+class StockAdjustRequest(BaseModel):
+    warehouse: WarehouseCode = WarehouseCode.A
+    items: list[StockAdjustItem] = Field(min_length=1)
+
+
+class StockAdjustResultItem(BaseModel):
+    product_id: UUID
+    name: str
+    quantity_added: int
+    stock_quantity: int
+    stock_quantity_b: int
+
+
+class StockAdjustResponse(BaseModel):
+    warehouse: WarehouseCode
+    items: list[StockAdjustResultItem]
 
 
 class ShopListPage(BaseModel):

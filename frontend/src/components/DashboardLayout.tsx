@@ -10,6 +10,7 @@ import { MobileBottomNav } from "@/components/MobileBottomNav";
 import { LocationTracker } from "@/components/location/LocationTracker";
 import { AiChatDrawer } from "@/components/ai/AiChatDrawer";
 import { InvoiceSyncRunner } from "@/lib/invoiceSyncRunner";
+import { ThemeToggle } from "@/components/ThemeToggle";
 
 export const DashboardLayout = ({ children }: { children?: React.ReactNode }) => {
   const { signOut, user } = useAuth();
@@ -83,8 +84,9 @@ export const DashboardLayout = ({ children }: { children?: React.ReactNode }) =>
                       </button>
                     ))}
                   </nav>
-                  <div className="p-4 border-t safe-area-inset">
-                    <p className="text-xs text-muted-foreground mb-3 truncate">{user?.email}</p>
+                  <div className="p-4 border-t space-y-2 safe-area-inset">
+                    <p className="text-xs text-muted-foreground truncate">{user?.email}</p>
+                    <ThemeToggle showLabel />
                     <Button variant="outline" className="w-full h-11" onClick={handleSignOut}>
                       <LogOut className="h-4 w-4 mr-2" />
                       Sign Out
@@ -120,9 +122,10 @@ export const DashboardLayout = ({ children }: { children?: React.ReactNode }) =>
             </nav>
           </div>
 
-          <div className="hidden md:flex items-center gap-3">
-            <span className="text-sm text-muted-foreground truncate max-w-[180px]">{user?.email}</span>
-            <Button variant="outline" size="sm" onClick={handleSignOut}>
+          <div className="flex items-center gap-2 md:gap-3">
+            <ThemeToggle />
+            <span className="hidden md:inline text-sm text-muted-foreground truncate max-w-[180px]">{user?.email}</span>
+            <Button variant="outline" size="sm" className="hidden md:inline-flex" onClick={handleSignOut}>
               <LogOut className="h-4 w-4 mr-2" />
               Sign Out
             </Button>
