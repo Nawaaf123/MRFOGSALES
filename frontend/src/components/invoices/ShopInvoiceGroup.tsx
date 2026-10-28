@@ -164,7 +164,8 @@ export const ShopInvoiceGroup = ({
   const actionButtons = (invoice: ShopGroupInvoice, outline: boolean) => {
     const variant = outline ? "outline" : "ghost";
     const pending = pendingOf(invoice);
-    const btnClass = outline ? "h-10 min-w-10 flex-1 sm:flex-none" : "h-8 w-8 p-0";
+    // Phone cards use a 4-column grid with the label under the icon, so labels never spill into neighbors.
+    const btnClass = outline ? "h-14 w-full min-w-0 flex-col gap-1 px-1 sm:h-10" : "h-8 w-8 p-0";
     const showEdit = Boolean(canEditInvoice?.(invoice) && onEditInvoice);
     const showDelete = typeof canDelete === "function" ? canDelete(invoice) : canDelete;
 
@@ -173,7 +174,7 @@ export const ShopInvoiceGroup = ({
         <>
           <Button variant={variant} size="sm" className={btnClass} onClick={() => onViewInvoice(invoice)} title="View">
             <Eye className="h-4 w-4" />
-            {outline && <span className="ml-1 sm:hidden text-xs">View</span>}
+            {outline && <span className="sm:hidden text-[11px] leading-none">View</span>}
           </Button>
           {canManage && (
             <Button
@@ -189,7 +190,7 @@ export const ShopInvoiceGroup = ({
               ) : (
                 <RefreshCw className="h-4 w-4" />
               )}
-              {outline && <span className="ml-1 sm:hidden text-xs">Sync</span>}
+              {outline && <span className="sm:hidden text-[11px] leading-none">Sync</span>}
             </Button>
           )}
           {canManage && (
@@ -201,7 +202,7 @@ export const ShopInvoiceGroup = ({
               title="Remove from queue"
             >
               <Trash2 className="h-4 w-4 text-destructive" />
-              {outline && <span className="ml-1 sm:hidden text-xs text-destructive">Remove</span>}
+              {outline && <span className="sm:hidden text-[11px] leading-none text-destructive">Remove</span>}
             </Button>
           )}
         </>
@@ -212,7 +213,7 @@ export const ShopInvoiceGroup = ({
       <>
         <Button variant={variant} size="sm" className={btnClass} onClick={() => onViewInvoice(invoice)} title="View">
           <Eye className="h-4 w-4" />
-          {outline && <span className="ml-1 sm:hidden text-xs">View</span>}
+          {outline && <span className="sm:hidden text-[11px] leading-none">View</span>}
         </Button>
         {showEdit && (
           <Button
@@ -223,7 +224,7 @@ export const ShopInvoiceGroup = ({
             title="Edit line items"
           >
             <Pencil className="h-4 w-4" />
-            {outline && <span className="ml-1 sm:hidden text-xs">Edit</span>}
+            {outline && <span className="sm:hidden text-[11px] leading-none">Edit</span>}
           </Button>
         )}
         {canManage && onMarkDroppedOff && !invoice.dropped_off_at && (
@@ -235,7 +236,7 @@ export const ShopInvoiceGroup = ({
             title="Mark dropped off"
           >
             <Truck className="h-4 w-4 text-amber-600" />
-            {outline && <span className="ml-1 sm:hidden text-xs">Drop off</span>}
+            {outline && <span className="sm:hidden text-[11px] leading-none">Drop off</span>}
           </Button>
         )}
         {canManage && pending > 0.01 && (
@@ -247,7 +248,7 @@ export const ShopInvoiceGroup = ({
             title="Record Payment"
           >
             <DollarSign className="h-4 w-4" />
-            {outline && <span className="ml-1 sm:hidden text-xs">Pay</span>}
+            {outline && <span className="sm:hidden text-[11px] leading-none">Pay</span>}
           </Button>
         )}
         <Button
@@ -258,7 +259,7 @@ export const ShopInvoiceGroup = ({
           title="Export PDF"
         >
           <Download className="h-4 w-4" />
-          {outline && <span className="ml-1 sm:hidden text-xs">PDF</span>}
+          {outline && <span className="sm:hidden text-[11px] leading-none">PDF</span>}
         </Button>
         {canManage && (
           <Button
@@ -274,7 +275,7 @@ export const ShopInvoiceGroup = ({
             ) : (
               <Mail className="h-4 w-4" />
             )}
-            {outline && <span className="ml-1 sm:hidden text-xs">Email</span>}
+            {outline && <span className="sm:hidden text-[11px] leading-none">Email</span>}
           </Button>
         )}
         {showDelete && (
@@ -286,7 +287,7 @@ export const ShopInvoiceGroup = ({
             title="Delete Invoice"
           >
             <Trash2 className="h-4 w-4 text-destructive" />
-            {outline && <span className="ml-1 sm:hidden text-xs text-destructive">Del</span>}
+            {outline && <span className="sm:hidden text-[11px] leading-none text-destructive">Delete</span>}
           </Button>
         )}
       </>
@@ -405,7 +406,7 @@ export const ShopInvoiceGroup = ({
                       <p className="mb-2 text-xs text-destructive">{invoice.local_sync_error}</p>
                     )}
 
-                    <div className="flex flex-wrap gap-1 border-t pt-2">
+                    <div className="grid grid-cols-4 gap-1.5 border-t pt-2">
                       {actionButtons(invoice, true)}
                     </div>
                   </CardContent>
