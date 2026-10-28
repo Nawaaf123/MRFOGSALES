@@ -164,8 +164,8 @@ export const ShopInvoiceGroup = ({
   const actionButtons = (invoice: ShopGroupInvoice, outline: boolean) => {
     const variant = outline ? "outline" : "ghost";
     const pending = pendingOf(invoice);
-    // Phone cards use a 4-column grid with the label under the icon, so labels never spill into neighbors.
-    const btnClass = outline ? "h-14 w-full min-w-0 flex-col gap-1 px-1 sm:h-10" : "h-8 w-8 p-0";
+    // Phone cards: fixed-size icon buttons that wrap instead of shrinking, so nothing overlaps.
+    const btnClass = outline ? "h-9 w-9 shrink-0 p-0" : "h-8 w-8 p-0";
     const showEdit = Boolean(canEditInvoice?.(invoice) && onEditInvoice);
     const showDelete = typeof canDelete === "function" ? canDelete(invoice) : canDelete;
 
@@ -174,7 +174,7 @@ export const ShopInvoiceGroup = ({
         <>
           <Button variant={variant} size="sm" className={btnClass} onClick={() => onViewInvoice(invoice)} title="View">
             <Eye className="h-4 w-4" />
-            {outline && <span className="sm:hidden text-[11px] leading-none">View</span>}
+            {outline && <span className="sr-only">View</span>}
           </Button>
           {canManage && (
             <Button
@@ -190,7 +190,7 @@ export const ShopInvoiceGroup = ({
               ) : (
                 <RefreshCw className="h-4 w-4" />
               )}
-              {outline && <span className="sm:hidden text-[11px] leading-none">Sync</span>}
+              {outline && <span className="sr-only">Sync</span>}
             </Button>
           )}
           {canManage && (
@@ -202,7 +202,7 @@ export const ShopInvoiceGroup = ({
               title="Remove from queue"
             >
               <Trash2 className="h-4 w-4 text-destructive" />
-              {outline && <span className="sm:hidden text-[11px] leading-none text-destructive">Remove</span>}
+              {outline && <span className="sr-only text-destructive">Remove</span>}
             </Button>
           )}
         </>
@@ -213,7 +213,7 @@ export const ShopInvoiceGroup = ({
       <>
         <Button variant={variant} size="sm" className={btnClass} onClick={() => onViewInvoice(invoice)} title="View">
           <Eye className="h-4 w-4" />
-          {outline && <span className="sm:hidden text-[11px] leading-none">View</span>}
+          {outline && <span className="sr-only">View</span>}
         </Button>
         {showEdit && (
           <Button
@@ -224,7 +224,7 @@ export const ShopInvoiceGroup = ({
             title="Edit line items"
           >
             <Pencil className="h-4 w-4" />
-            {outline && <span className="sm:hidden text-[11px] leading-none">Edit</span>}
+            {outline && <span className="sr-only">Edit</span>}
           </Button>
         )}
         {canManage && onMarkDroppedOff && !invoice.dropped_off_at && (
@@ -236,7 +236,7 @@ export const ShopInvoiceGroup = ({
             title="Mark dropped off"
           >
             <Truck className="h-4 w-4 text-amber-600" />
-            {outline && <span className="sm:hidden text-[11px] leading-none">Drop off</span>}
+            {outline && <span className="sr-only">Drop off</span>}
           </Button>
         )}
         {canManage && pending > 0.01 && (
@@ -248,7 +248,7 @@ export const ShopInvoiceGroup = ({
             title="Record Payment"
           >
             <DollarSign className="h-4 w-4" />
-            {outline && <span className="sm:hidden text-[11px] leading-none">Pay</span>}
+            {outline && <span className="sr-only">Pay</span>}
           </Button>
         )}
         <Button
@@ -259,7 +259,7 @@ export const ShopInvoiceGroup = ({
           title="Export PDF"
         >
           <Download className="h-4 w-4" />
-          {outline && <span className="sm:hidden text-[11px] leading-none">PDF</span>}
+          {outline && <span className="sr-only">PDF</span>}
         </Button>
         {canManage && (
           <Button
@@ -275,7 +275,7 @@ export const ShopInvoiceGroup = ({
             ) : (
               <Mail className="h-4 w-4" />
             )}
-            {outline && <span className="sm:hidden text-[11px] leading-none">Email</span>}
+            {outline && <span className="sr-only">Email</span>}
           </Button>
         )}
         {showDelete && (
@@ -287,7 +287,7 @@ export const ShopInvoiceGroup = ({
             title="Delete Invoice"
           >
             <Trash2 className="h-4 w-4 text-destructive" />
-            {outline && <span className="sm:hidden text-[11px] leading-none text-destructive">Delete</span>}
+            {outline && <span className="sr-only text-destructive">Delete</span>}
           </Button>
         )}
       </>
@@ -367,46 +367,40 @@ export const ShopInvoiceGroup = ({
 
       {isExpanded && (
         <>
-          <div className="md:hidden p-3 space-y-3">
+          <div className="md:hidden p-2 space-y-2">
             {invoices.map((invoice) => {
               const pendingAmount = pendingOf(invoice);
               return (
                 <Card key={invoice.id}>
-                  <CardContent className="p-3">
-                    <div className="flex justify-between items-start mb-2">
-                      <div>
-                        <p className="font-semibold">{invoice.invoice_number}</p>
-                        <p className="text-xs text-muted-foreground">
+                  <CardContent className="p-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="min-w-0 truncate text-sm font-semibold leading-tight">
+                        {invoice.invoice_number}
+                        <span className="ml-1.5 text-[11px] font-normal text-muted-foreground">
                           {new Date(invoice.created_at).toLocaleDateString()}
-                        </p>
-                      </div>
-                      <div className="flex flex-col items-end gap-1">
-                        {getStatusBadge(invoice)}
-                        {getDropOffBadge(invoice)}
-                      </div>
+                        </span>
+                      </p>
+                      <div className="shrink-0">{getStatusBadge(invoice)}</div>
                     </div>
-
-                    <div className="grid grid-cols-2 gap-2 text-sm mb-3">
-                      <div>
-                        <span className="text-muted-foreground">Amount</span>
-                        <p className="font-semibold">${Number(invoice.total_amount).toFixed(2)}</p>
-                      </div>
-                      <div>
-                        <span className="text-muted-foreground">Pending</span>
-                        <p
-                          className={`font-semibold tabular-nums ${
+                    <div className="mt-1 flex items-center justify-between gap-2">
+                      <p className="min-w-0 whitespace-nowrap text-xs tabular-nums">
+                        <span className="font-semibold">${Number(invoice.total_amount).toFixed(2)}</span>
+                        <span className="text-muted-foreground"> · Pending </span>
+                        <span
+                          className={`font-semibold ${
                             pendingAmount > 0 ? "text-primary" : "text-muted-foreground"
                           }`}
                         >
                           ${pendingAmount.toFixed(2)}
-                        </p>
-                      </div>
+                        </span>
+                      </p>
+                      <div className="shrink-0">{getDropOffBadge(invoice)}</div>
                     </div>
                     {invoice.local_sync_error && (
-                      <p className="mb-2 text-xs text-destructive">{invoice.local_sync_error}</p>
+                      <p className="mt-1 text-xs text-destructive">{invoice.local_sync_error}</p>
                     )}
 
-                    <div className="grid grid-cols-4 gap-1.5 border-t pt-2">
+                    <div className="mt-2 flex flex-wrap gap-1 border-t pt-2">
                       {actionButtons(invoice, true)}
                     </div>
                   </CardContent>
