@@ -266,6 +266,10 @@ class InvoiceOut(ORMModel):
     payment_status: PaymentStatus
     notes: str | None
     warehouse: WarehouseCode | None
+    dropped_off_at: datetime | None = None
+    dropped_off_by: UUID | None = None
+    drop_off_undone_at: datetime | None = None
+    drop_off_undone_by: UUID | None = None
     created_at: datetime
     updated_at: datetime
     items: list[InvoiceItemOut] = []
@@ -286,6 +290,10 @@ class InvoiceListOut(ORMModel):
     payment_status: PaymentStatus
     notes: str | None = None
     warehouse: WarehouseCode | None = None
+    dropped_off_at: datetime | None = None
+    dropped_off_by: UUID | None = None
+    drop_off_undone_at: datetime | None = None
+    drop_off_undone_by: UUID | None = None
     created_at: datetime
     updated_at: datetime | None = None
     shop: ShopBrief | None = None

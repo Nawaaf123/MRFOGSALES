@@ -1,4 +1,5 @@
 from datetime import date, datetime, timezone
+from typing import Literal
 from uuid import UUID
 from zoneinfo import ZoneInfo
 
@@ -184,6 +185,10 @@ def serialize_invoice(invoice: Invoice, db: Session, *, amount_paid: float | Non
         payment_status=invoice.payment_status,
         notes=invoice.notes,
         warehouse=invoice.warehouse,
+        dropped_off_at=invoice.dropped_off_at,
+        dropped_off_by=invoice.dropped_off_by,
+        drop_off_undone_at=invoice.drop_off_undone_at,
+        drop_off_undone_by=invoice.drop_off_undone_by,
         created_at=invoice.created_at,
         updated_at=invoice.updated_at,
         items=items,
@@ -205,6 +210,10 @@ def serialize_invoice_list_row(invoice: Invoice, amount_paid: float) -> InvoiceL
         payment_status=invoice.payment_status,
         notes=invoice.notes,
         warehouse=invoice.warehouse,
+        dropped_off_at=invoice.dropped_off_at,
+        dropped_off_by=invoice.dropped_off_by,
+        drop_off_undone_at=invoice.drop_off_undone_at,
+        drop_off_undone_by=invoice.drop_off_undone_by,
         created_at=invoice.created_at,
         updated_at=invoice.updated_at,
         shop=shop,
@@ -244,6 +253,7 @@ def list_invoices(
     shop_id: UUID | None = Query(default=None),
     date_from: datetime | None = Query(default=None),
     date_to: datetime | None = Query(default=None),
+    drop_off: Literal["pending", "done"] | None = Query(default=None),
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=50, ge=1, le=500),
     db: Session = Depends(get_db),
@@ -267,6 +277,10 @@ def list_invoices(
         query = query.filter(Invoice.created_at >= date_from)
     if date_to:
         query = query.filter(Invoice.created_at <= date_to)
+    if drop_off == "pending":
+        query = query.filter(Invoice.dropped_off_at.is_(None))
+    elif drop_off == "done":
+        query = query.filter(Invoice.dropped_off_at.is_not(None))
     if search:
         like = f"%{search}%"
         query = query.filter(
@@ -578,6 +592,52 @@ def delete_invoice(
     db.commit()
 
 
+def _invoice_for_drop_off(db: Session, invoice_id: UUID) -> Invoice:
+    invoice = db.query(Invoice).filter(Invoice.id == invoice_id).with_for_update().first()
+    if not invoice:
+        raise HTTPException(status_code=404, detail="Invoice not found")
+    return invoice
+
+
+def _drop_off_row(db: Session, invoice: Invoice) -> InvoiceListOut:
+    paid = paid_amounts_for_invoices(db, [invoice.id]).get(invoice.id, 0.0)
+    return serialize_invoice_list_row(invoice, paid)
+
+
+@router.post("/invoices/{invoice_id}/drop-off", response_model=InvoiceListOut)
+def mark_dropped_off(
+    invoice_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(*_STAFF_ROLES)),
+) -> InvoiceListOut:
+    invoice = _invoice_for_drop_off(db, invoice_id)
+    if invoice.dropped_off_at is not None:
+        raise HTTPException(status_code=409, detail="Invoice is already marked dropped off")
+    invoice.dropped_off_at = datetime.now(timezone.utc)
+    invoice.dropped_off_by = current_user.id
+    db.commit()
+    db.refresh(invoice)
+    return _drop_off_row(db, invoice)
+
+
+@router.post("/invoices/{invoice_id}/drop-off/undo", response_model=InvoiceListOut)
+def undo_dropped_off(
+    invoice_id: UUID,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(*_STAFF_ROLES)),
+) -> InvoiceListOut:
+    invoice = _invoice_for_drop_off(db, invoice_id)
+    if invoice.dropped_off_at is None:
+        raise HTTPException(status_code=409, detail="Invoice is not marked dropped off")
+    invoice.dropped_off_at = None
+    invoice.dropped_off_by = None
+    invoice.drop_off_undone_at = datetime.now(timezone.utc)
+    invoice.drop_off_undone_by = current_user.id
+    db.commit()
+    db.refresh(invoice)
+    return _drop_off_row(db, invoice)
+
+
 @router.post("/invoices/legacy-balance", response_model=InvoiceOut, status_code=status.HTTP_201_CREATED)
 def create_legacy_balance(
     payload: LegacyBalanceCreate,
@@ -600,6 +660,8 @@ def create_legacy_balance(
         discount_amount=0,
         notes=note,
         payment_status=PaymentStatus.unpaid,
+        # An opening balance has no goods to deliver.
+        dropped_off_at=datetime.now(timezone.utc),
     )
     db.add(invoice)
     db.commit()

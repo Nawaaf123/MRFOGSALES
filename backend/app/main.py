@@ -58,6 +58,18 @@ async def lifespan(_: FastAPI):
             "INSERT INTO invoice_number_counter (id, last_value) "
             "SELECT 1, COALESCE(MAX(substring(invoice_number FROM 5)::int), 0) FROM invoices "
             "WHERE invoice_number ~ '^INV-[0-9]{6}$' ON CONFLICT (id) DO NOTHING",
+            # One-time: invoices that existed before drop-off tracking count as dropped off.
+            # Runs only when the column is first added, so later invoices stay pending.
+            "DO $$ BEGIN "
+            "IF NOT EXISTS (SELECT 1 FROM information_schema.columns "
+            "WHERE table_name = 'invoices' AND column_name = 'dropped_off_at') THEN "
+            "ALTER TABLE invoices ADD COLUMN dropped_off_at TIMESTAMPTZ; "
+            "UPDATE invoices SET dropped_off_at = created_at; "
+            "END IF; END $$",
+            "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS dropped_off_by UUID REFERENCES users(id)",
+            "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS drop_off_undone_at TIMESTAMPTZ",
+            "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS drop_off_undone_by UUID REFERENCES users(id)",
+            "CREATE INDEX IF NOT EXISTS ix_invoices_dropped_off_at ON invoices (dropped_off_at)",
         ]:
             conn.execute(text(statement))
 

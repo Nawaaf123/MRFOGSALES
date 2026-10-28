@@ -88,7 +88,18 @@ import { ShopSearchSelect } from "@/components/shops/ShopSearchSelect";
 import { PageHero } from "@/components/ui/PageHero";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { cn } from "@/lib/utils";
-import { Check, ChevronsUpDown, CloudOff, FileText, Plus, RefreshCw, ScanLine, Sparkles, Trash2 } from "lucide-react";
+import {
+  Check,
+  ChevronsUpDown,
+  CloudOff,
+  FileText,
+  Plus,
+  RefreshCw,
+  ScanLine,
+  Sparkles,
+  Trash2,
+  Truck,
+} from "lucide-react";
 
 type Product = {
   id: string;
@@ -154,6 +165,10 @@ type Invoice = {
   payment_status: PaymentStatus;
   notes: string | null;
   warehouse: "A" | "B" | null;
+  dropped_off_at?: string | null;
+  dropped_off_by?: string | null;
+  drop_off_undone_at?: string | null;
+  drop_off_undone_by?: string | null;
   created_at: string;
   items?: InvoiceItem[];
   payments?: InvoicePayment[];
@@ -295,6 +310,7 @@ const Invoices = () => {
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [dropOffFilter, setDropOffFilter] = useState<"all" | "pending" | "done">("all");
   const [shopFilter, setShopFilter] = useState("all");
   const [shopFilterLabel, setShopFilterLabel] = useState<string | null>(null);
   const [page, setPage] = useState(1);
@@ -306,7 +322,7 @@ const Invoices = () => {
 
   useEffect(() => {
     setPage(1);
-  }, [debouncedSearch, statusFilter, shopFilter]);
+  }, [debouncedSearch, statusFilter, dropOffFilter, shopFilter]);
 
   const [createOpen, setCreateOpen] = useState(false);
   const [editingInvoiceId, setEditingInvoiceId] = useState<string | null>(null);
@@ -343,6 +359,11 @@ const Invoices = () => {
   const [viewInvoice, setViewInvoice] = useState<Invoice | null>(null);
   const [deleteInvoice, setDeleteInvoice] = useState<Invoice | null>(null);
   const [deleteConfirmStep, setDeleteConfirmStep] = useState<1 | 2>(1);
+  const [dropOffTarget, setDropOffTarget] = useState<{
+    id: string;
+    invoice_number: string;
+    action: "mark" | "undo";
+  } | null>(null);
   const [emailingId, setEmailingId] = useState<string | null>(null);
 
   const [distributeTarget, setDistributeTarget] = useState<{
@@ -356,9 +377,10 @@ const Invoices = () => {
     () => ({
       search: debouncedSearch || undefined,
       payment_status: statusFilter !== "all" ? statusFilter : undefined,
+      drop_off: dropOffFilter !== "all" ? dropOffFilter : undefined,
       shop_id: shopFilter !== "all" ? shopFilter : undefined,
     }),
-    [debouncedSearch, statusFilter, shopFilter]
+    [debouncedSearch, statusFilter, dropOffFilter, shopFilter]
   );
 
   const {
@@ -509,6 +531,9 @@ const Invoices = () => {
     return [];
   }, [profiles, user]);
 
+  const personName = (id: string | null | undefined) =>
+    (id && profilesForNames.find((p) => p.id === id)?.full_name) || "Unknown";
+
   const shopGroups = useMemo(() => {
     const map = new Map<
       string,
@@ -545,6 +570,8 @@ const Invoices = () => {
     for (const local of localPendingInvoices) {
       if (shopFilter !== "all" && local.shop_id !== shopFilter) continue;
       if (statusFilter !== "all" && local.payment_status !== statusFilter) continue;
+      // Offline creates haven't reached the server, so they can't be dropped off yet.
+      if (dropOffFilter === "done") continue;
       if (debouncedSearch) {
         const q = debouncedSearch.toLowerCase();
         const hay = `${local.invoice_number} ${local.shop?.name || ""}`.toLowerCase();
@@ -575,7 +602,7 @@ const Invoices = () => {
         (a, b) =>
           b.latestAt - a.latestAt || b.pending - a.pending || a.shopName.localeCompare(b.shopName)
       );
-  }, [invoices, localPendingInvoices, shopFilter, statusFilter, debouncedSearch]);
+  }, [invoices, localPendingInvoices, shopFilter, statusFilter, dropOffFilter, debouncedSearch]);
 
   const pagedShopGroups = useMemo(() => {
     const start = (page - 1) * SHOP_GROUPS_PER_PAGE;
@@ -1375,6 +1402,40 @@ const Invoices = () => {
     },
   });
 
+  const dropOffMutation = useMutation({
+    mutationFn: (target: { id: string; action: "mark" | "undo" }) =>
+      api<Invoice>(
+        target.action === "mark"
+          ? `/invoices/${target.id}/drop-off`
+          : `/invoices/${target.id}/drop-off/undo`,
+        { method: "POST" }
+      ),
+    onSuccess: (row, target) => {
+      refetchInvoices();
+      setViewInvoice((current) =>
+        current && current.id === row.id
+          ? {
+              ...current,
+              dropped_off_at: row.dropped_off_at,
+              dropped_off_by: row.dropped_off_by,
+              drop_off_undone_at: row.drop_off_undone_at,
+              drop_off_undone_by: row.drop_off_undone_by,
+            }
+          : current
+      );
+      setDropOffTarget(null);
+      toast({
+        title: target.action === "mark" ? "Marked dropped off" : "Drop-off undone",
+        description: row.invoice_number,
+      });
+    },
+    onError: (error: ApiError) => {
+      setDropOffTarget(null);
+      refetchInvoices();
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
+
   const remainingForPayment = paymentInvoice
     ? Math.max(0, Number(paymentInvoice.total_amount) - Number(paymentInvoice.amount_paid || 0))
     : 0;
@@ -1523,7 +1584,7 @@ const Invoices = () => {
         )}
 
         <Card className="border-primary/10 p-4">
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
             <div className="space-y-2">
               <Label>Search</Label>
               <Input
@@ -1544,6 +1605,22 @@ const Invoices = () => {
                   <SelectItem value="unpaid">Unpaid</SelectItem>
                   <SelectItem value="partial">Partial</SelectItem>
                   <SelectItem value="paid">Paid</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Drop-off</Label>
+              <Select
+                value={dropOffFilter}
+                onValueChange={(v) => setDropOffFilter(v as "all" | "pending" | "done")}
+              >
+                <SelectTrigger className="h-11">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All</SelectItem>
+                  <SelectItem value="pending">Not dropped off</SelectItem>
+                  <SelectItem value="done">Dropped off</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -1638,10 +1715,14 @@ const Invoices = () => {
                   payment_status: inv.payment_status,
                   created_at: inv.created_at,
                   amount_paid: inv.amount_paid,
+                  dropped_off_at: inv.dropped_off_at ?? null,
                   local_sync: inv.local_sync,
                   local_sync_error: inv.local_sync_error,
                   client_request_id: inv.client_request_id,
                 }))}
+                onMarkDroppedOff={(inv) =>
+                  setDropOffTarget({ id: inv.id, invoice_number: inv.invoice_number, action: "mark" })
+                }
                 onViewInvoice={(inv) => {
                   if (inv.local_sync) {
                     const local = localPendingInvoices.find((i) => i.id === inv.id);
@@ -2483,6 +2564,58 @@ const Invoices = () => {
                     "Saved on this device only. It will upload when you’re online. PDF/email after sync."}
                 </p>
               )}
+              {!viewInvoice.local_sync && (
+                <div
+                  className={cn(
+                    "flex flex-col gap-2 rounded-md border px-3 py-2 sm:flex-row sm:items-center sm:justify-between",
+                    viewInvoice.dropped_off_at
+                      ? "border-green-600/30 bg-green-600/5"
+                      : "border-amber-500/40 bg-amber-500/10"
+                  )}
+                >
+                  <div className="min-w-0 text-sm">
+                    {viewInvoice.dropped_off_at ? (
+                      <>
+                        <p className="font-semibold text-green-700 dark:text-green-500">Dropped off</p>
+                        <p className="text-xs text-muted-foreground">
+                          {viewInvoice.dropped_off_by
+                            ? `${personName(viewInvoice.dropped_off_by)} · ${new Date(
+                                viewInvoice.dropped_off_at
+                              ).toLocaleString()}`
+                            : "Recorded before drop-off tracking started"}
+                        </p>
+                      </>
+                    ) : (
+                      <>
+                        <p className="font-semibold text-amber-800 dark:text-amber-200">Not dropped off</p>
+                        {viewInvoice.drop_off_undone_at && (
+                          <p className="text-xs text-muted-foreground">
+                            Drop-off undone by {personName(viewInvoice.drop_off_undone_by)} ·{" "}
+                            {new Date(viewInvoice.drop_off_undone_at).toLocaleString()}
+                          </p>
+                        )}
+                      </>
+                    )}
+                  </div>
+                  {canCreate && (
+                    <Button
+                      size="sm"
+                      variant={viewInvoice.dropped_off_at ? "outline" : "default"}
+                      className="h-9 shrink-0"
+                      onClick={() =>
+                        setDropOffTarget({
+                          id: viewInvoice.id,
+                          invoice_number: viewInvoice.invoice_number,
+                          action: viewInvoice.dropped_off_at ? "undo" : "mark",
+                        })
+                      }
+                    >
+                      <Truck className="mr-1.5 h-4 w-4" />
+                      {viewInvoice.dropped_off_at ? "Undo drop-off" : "Mark dropped off"}
+                    </Button>
+                  )}
+                </div>
+              )}
               {Number(viewInvoice.discount_amount || 0) > 0 && (
                 <div className="grid grid-cols-3 gap-3 rounded-md bg-muted/50 px-3 py-2">
                   <div>
@@ -2681,6 +2814,44 @@ const Invoices = () => {
                 : deleteConfirmStep === 1
                   ? "Delete"
                   : "Yes, delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={!!dropOffTarget}
+        onOpenChange={(open) => {
+          if (!open && !dropOffMutation.isPending) setDropOffTarget(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {dropOffTarget?.action === "undo"
+                ? `Undo drop-off for ${dropOffTarget?.invoice_number}?`
+                : `Mark ${dropOffTarget?.invoice_number} as dropped off?`}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {dropOffTarget?.action === "undo"
+                ? "It will show as Not dropped off again. Your name and the time are recorded."
+                : "Confirm the goods were delivered to the shop. Your name and the time are recorded."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={dropOffMutation.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={dropOffMutation.isPending || !dropOffTarget}
+              onClick={(e) => {
+                e.preventDefault();
+                if (dropOffTarget) dropOffMutation.mutate(dropOffTarget);
+              }}
+            >
+              {dropOffMutation.isPending
+                ? "Saving..."
+                : dropOffTarget?.action === "undo"
+                  ? "Undo drop-off"
+                  : "Confirm"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

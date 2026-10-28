@@ -158,6 +158,11 @@ class Invoice(Base):
     warehouse: Mapped[WarehouseCode | None] = mapped_column(
         Enum(WarehouseCode, name="warehouse_code", create_type=False), nullable=True
     )
+    # Null until someone confirms the goods reached the shop.
+    dropped_off_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    dropped_off_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    drop_off_undone_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    drop_off_undone_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()

@@ -11,6 +11,7 @@ import {
   Loader2,
   RefreshCw,
   Pencil,
+  Truck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -34,6 +35,7 @@ export type ShopGroupInvoice = {
   payment_status: "paid" | "partial" | "unpaid";
   created_at: string;
   amount_paid: number;
+  dropped_off_at?: string | null;
   /** Present when this row is a local offline create waiting to upload. */
   local_sync?: "pending" | "syncing" | "failed";
   local_sync_error?: string | null;
@@ -52,6 +54,7 @@ interface ShopInvoiceGroupProps {
   sendingEmailId: string | null;
   onDeleteInvoice: (invoice: ShopGroupInvoice) => void;
   onEditInvoice?: (invoice: ShopGroupInvoice) => void;
+  onMarkDroppedOff?: (invoice: ShopGroupInvoice) => void;
   onRetryLocalSync?: (invoice: ShopGroupInvoice) => void;
   onDiscardLocalSync?: (invoice: ShopGroupInvoice) => void;
   onDistributePayment: (
@@ -83,6 +86,7 @@ export const ShopInvoiceGroup = ({
   sendingEmailId,
   onDeleteInvoice,
   onEditInvoice,
+  onMarkDroppedOff,
   onRetryLocalSync,
   onDiscardLocalSync,
   onDistributePayment,
@@ -130,6 +134,19 @@ export const ShopInvoiceGroup = ({
     return (
       <Badge variant="destructive" className="capitalize">
         Unpaid
+      </Badge>
+    );
+  };
+
+  const getDropOffBadge = (invoice: ShopGroupInvoice) => {
+    if (invoice.local_sync) return null;
+    return invoice.dropped_off_at ? (
+      <Badge className="border-transparent bg-green-600/15 text-green-700 hover:bg-green-600/15 dark:text-green-500">
+        Dropped off
+      </Badge>
+    ) : (
+      <Badge className="border-transparent bg-amber-500/15 text-amber-800 hover:bg-amber-500/15 dark:text-amber-200">
+        Not dropped off
       </Badge>
     );
   };
@@ -207,6 +224,18 @@ export const ShopInvoiceGroup = ({
           >
             <Pencil className="h-4 w-4" />
             {outline && <span className="ml-1 sm:hidden text-xs">Edit</span>}
+          </Button>
+        )}
+        {canManage && onMarkDroppedOff && !invoice.dropped_off_at && (
+          <Button
+            variant={variant}
+            size="sm"
+            className={btnClass}
+            onClick={() => onMarkDroppedOff(invoice)}
+            title="Mark dropped off"
+          >
+            <Truck className="h-4 w-4 text-amber-600" />
+            {outline && <span className="ml-1 sm:hidden text-xs">Drop off</span>}
           </Button>
         )}
         {canManage && pending > 0.01 && (
@@ -350,7 +379,10 @@ export const ShopInvoiceGroup = ({
                           {new Date(invoice.created_at).toLocaleDateString()}
                         </p>
                       </div>
-                      {getStatusBadge(invoice)}
+                      <div className="flex flex-col items-end gap-1">
+                        {getStatusBadge(invoice)}
+                        {getDropOffBadge(invoice)}
+                      </div>
                     </div>
 
                     <div className="grid grid-cols-2 gap-2 text-sm mb-3">
@@ -391,6 +423,7 @@ export const ShopInvoiceGroup = ({
                   <TableHead>Amount</TableHead>
                   <TableHead>Pending</TableHead>
                   <TableHead>Status</TableHead>
+                  <TableHead>Drop-off</TableHead>
                   <TableHead>Created By</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
@@ -422,6 +455,7 @@ export const ShopInvoiceGroup = ({
                           )}
                         </div>
                       </TableCell>
+                      <TableCell>{getDropOffBadge(invoice)}</TableCell>
                       <TableCell>{creatorName(invoice.created_by)}</TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1">{actionButtons(invoice, false)}</div>
