@@ -70,6 +70,11 @@ async def lifespan(_: FastAPI):
             "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS drop_off_undone_at TIMESTAMPTZ",
             "ALTER TABLE invoices ADD COLUMN IF NOT EXISTS drop_off_undone_by UUID REFERENCES users(id)",
             "CREATE INDEX IF NOT EXISTS ix_invoices_dropped_off_at ON invoices (dropped_off_at)",
+            "ALTER TABLE payments ADD COLUMN IF NOT EXISTS bounced_at TIMESTAMPTZ",
+            "ALTER TABLE payments ADD COLUMN IF NOT EXISTS bounced_by UUID REFERENCES users(id)",
+            "ALTER TABLE payments ADD COLUMN IF NOT EXISTS bounce_reason TEXT",
+            "CREATE INDEX IF NOT EXISTS ix_payments_bounced_at ON payments (bounced_at) "
+            "WHERE bounced_at IS NOT NULL",
         ]:
             conn.execute(text(statement))
 

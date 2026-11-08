@@ -89,6 +89,7 @@ import { PageHero } from "@/components/ui/PageHero";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { cn } from "@/lib/utils";
 import {
+  AlertTriangle,
   Check,
   ChevronsUpDown,
   CloudOff,
@@ -127,6 +128,40 @@ type InvoicePayment = {
   amount: number;
   payment_method: PaymentMethod;
   payment_date: string;
+  check_number?: string | null;
+  notes?: string | null;
+  bounced_at?: string | null;
+  bounced_by?: string | null;
+  bounce_reason?: string | null;
+};
+
+type CheckGroup = {
+  shop_id: string;
+  shop_name: string;
+  check_number: string | null;
+  payment_date: string;
+  total: number;
+  payments: Array<{
+    payment_id: string;
+    invoice_id: string;
+    invoice_number: string;
+    amount: number;
+    bounced_at: string | null;
+  }>;
+};
+
+type BouncedCheckRow = {
+  payment_id: string;
+  invoice_id: string;
+  invoice_number: string;
+  shop_id: string;
+  shop_name: string;
+  amount: number;
+  check_number: string | null;
+  payment_date: string;
+  bounced_at: string;
+  bounced_by: string | null;
+  bounce_reason: string | null;
 };
 
 type WarehouseCode = "A" | "B";
@@ -348,6 +383,7 @@ const Invoices = () => {
   const [cashAmount, setCashAmount] = useState("");
   const [checkAmount, setCheckAmount] = useState("");
   const [creditAmount, setCreditAmount] = useState("");
+  const [createCheckNumber, setCreateCheckNumber] = useState("");
 
   const [paymentInvoice, setPaymentInvoice] = useState<Invoice | null>(null);
   const [payAmount, setPayAmount] = useState("");
@@ -359,6 +395,12 @@ const Invoices = () => {
   const [viewInvoice, setViewInvoice] = useState<Invoice | null>(null);
   const [deleteInvoice, setDeleteInvoice] = useState<Invoice | null>(null);
   const [deleteConfirmStep, setDeleteConfirmStep] = useState<1 | 2>(1);
+  const [bounceTarget, setBounceTarget] = useState<{
+    paymentId: string;
+    action: "bounce" | "unbounce";
+  } | null>(null);
+  const [bounceReason, setBounceReason] = useState("");
+  const [bouncedListOpen, setBouncedListOpen] = useState(false);
   const [dropOffTarget, setDropOffTarget] = useState<{
     id: string;
     invoice_number: string;
@@ -647,6 +689,7 @@ const Invoices = () => {
     setCreateSubcategoryFilter("all");
     setCashAmount("");
     setCheckAmount("");
+    setCreateCheckNumber("");
     setCreditAmount("");
     if (opts?.clearDraft !== false && user?.id) {
       clearInvoiceCreateDraft(user.id);
@@ -683,7 +726,21 @@ const Invoices = () => {
     setCreateSubcategoryFilter("all");
     setCashAmount(draft.cash_amount || "");
     setCheckAmount(draft.check_amount || "");
+    setCreateCheckNumber(draft.check_number || "");
     setCreditAmount(draft.credit_amount || "");
+  };
+
+  const buildCreatePayments = () => {
+    const payments: Array<{ amount: number; payment_method: PaymentMethod; check_number?: string }> = [];
+    const cash = Number(cashAmount) || 0;
+    const check = Number(checkAmount) || 0;
+    const credit = Number(creditAmount) || 0;
+    if (cash > 0) payments.push({ amount: cash, payment_method: "cash" });
+    if (check > 0) {
+      payments.push({ amount: check, payment_method: "check", check_number: createCheckNumber.trim() });
+    }
+    if (credit > 0) payments.push({ amount: credit, payment_method: "credit" });
+    return payments;
   };
 
   const openCreateInvoice = () => {
@@ -813,6 +870,7 @@ const Invoices = () => {
         items,
         cash_amount: cashAmount,
         check_amount: checkAmount,
+        check_number: createCheckNumber,
         credit_amount: creditAmount,
         updated_at: new Date().toISOString(),
       };
@@ -831,6 +889,7 @@ const Invoices = () => {
     items,
     cashAmount,
     checkAmount,
+    createCheckNumber,
     creditAmount,
   ]);
 
@@ -1045,13 +1104,7 @@ const Invoices = () => {
       clientRequestIdRef.current = newClientRequestId();
     }
 
-    const payments: Array<{ amount: number; payment_method: PaymentMethod }> = [];
-    const cash = Number(cashAmount) || 0;
-    const check = Number(checkAmount) || 0;
-    const credit = Number(creditAmount) || 0;
-    if (cash > 0) payments.push({ amount: cash, payment_method: "cash" });
-    if (check > 0) payments.push({ amount: check, payment_method: "check" });
-    if (credit > 0) payments.push({ amount: credit, payment_method: "credit" });
+    const payments = buildCreatePayments();
 
     const shopName = selectedShopName.trim() || "Unknown shop";
     const queueItem = buildSyncQueueItem({
@@ -1092,14 +1145,11 @@ const Invoices = () => {
         clientRequestIdRef.current = newClientRequestId();
       }
       if (!user?.id) throw { message: "Not signed in" } satisfies ApiError;
+      if ((Number(checkAmount) || 0) > 0 && !createCheckNumber.trim()) {
+        throw { message: "Enter the check number" } satisfies ApiError;
+      }
 
-      const payments: Array<{ amount: number; payment_method: PaymentMethod }> = [];
-      const cash = Number(cashAmount) || 0;
-      const check = Number(checkAmount) || 0;
-      const credit = Number(creditAmount) || 0;
-      if (cash > 0) payments.push({ amount: cash, payment_method: "cash" });
-      if (check > 0) payments.push({ amount: check, payment_method: "check" });
-      if (credit > 0) payments.push({ amount: credit, payment_method: "credit" });
+      const payments = buildCreatePayments();
 
       // Persist working draft, then always enqueue first (safe with client_request_id).
       saveInvoiceCreateDraft(user.id, {
@@ -1112,6 +1162,7 @@ const Invoices = () => {
         items,
         cash_amount: cashAmount,
         check_amount: checkAmount,
+        check_number: createCheckNumber,
         credit_amount: creditAmount,
         updated_at: new Date().toISOString(),
       });
@@ -1360,6 +1411,9 @@ const Invoices = () => {
       if (amount > remaining + 0.01) {
         throw { message: "Amount cannot exceed remaining balance" } satisfies ApiError;
       }
+      if (payMethod === "check" && !payCheckNumber.trim()) {
+        throw { message: "Enter the check number" } satisfies ApiError;
+      }
       return api("/payments", {
         method: "POST",
         body: JSON.stringify({
@@ -1432,6 +1486,52 @@ const Invoices = () => {
     onError: (error: ApiError) => {
       setDropOffTarget(null);
       refetchInvoices();
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const { data: checkGroup, isLoading: checkGroupLoading } = useQuery({
+    queryKey: ["check-group", bounceTarget?.paymentId],
+    queryFn: () => api<CheckGroup>(`/payments/${bounceTarget!.paymentId}/check-group`),
+    enabled: Boolean(bounceTarget) && isAdmin,
+  });
+
+  const { data: bouncedChecks = [], isLoading: bouncedChecksLoading } = useQuery({
+    queryKey: ["bounced-checks"],
+    queryFn: () => api<BouncedCheckRow[]>("/payments/bounced"),
+    enabled: bouncedListOpen && isAdmin,
+  });
+
+  const openInvoiceDetails = async (invoiceId: string) => {
+    try {
+      setViewInvoice(await api<Invoice>(`/invoices/${invoiceId}`));
+    } catch (error: unknown) {
+      toast({
+        title: "Error",
+        description: (error as ApiError)?.message || "Could not load invoice",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const bounceMutation = useMutation({
+    mutationFn: (target: { paymentId: string; action: "bounce" | "unbounce"; reason: string }) =>
+      api<CheckGroup>(`/payments/${target.paymentId}/${target.action}`, {
+        method: "POST",
+        body: target.action === "bounce" ? JSON.stringify({ reason: target.reason.trim() || null }) : undefined,
+      }),
+    onSuccess: (_group, target) => {
+      refetchInvoices();
+      queryClient.invalidateQueries({ queryKey: ["bounced-checks"] });
+      queryClient.invalidateQueries({ queryKey: ["check-group"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
+      queryClient.invalidateQueries({ queryKey: ["pending-payments"] });
+      if (viewInvoice && !viewInvoice.local_sync) void openInvoiceDetails(viewInvoice.id);
+      setBounceTarget(null);
+      setBounceReason("");
+      toast({ title: target.action === "bounce" ? "Check marked bounced" : "Bounce undone" });
+    },
+    onError: (error: ApiError) => {
       toast({ title: "Error", description: error.message, variant: "destructive" });
     },
   });
@@ -1545,10 +1645,22 @@ const Invoices = () => {
           ]}
           action={
             canCreate ? (
-              <Button className="h-11 w-full shadow-sm shadow-primary/25 sm:w-auto" onClick={openCreateInvoice}>
-                <Plus className="mr-2 h-4 w-4" />
-                New Invoice
-              </Button>
+              <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+                {isAdmin && (
+                  <Button
+                    variant="outline"
+                    className="h-11 w-full sm:w-auto"
+                    onClick={() => setBouncedListOpen(true)}
+                  >
+                    <AlertTriangle className="mr-2 h-4 w-4 text-destructive" />
+                    Bounced checks
+                  </Button>
+                )}
+                <Button className="h-11 w-full shadow-sm shadow-primary/25 sm:w-auto" onClick={openCreateInvoice}>
+                  <Plus className="mr-2 h-4 w-4" />
+                  New Invoice
+                </Button>
+              </div>
             ) : undefined
           }
         />
@@ -2367,6 +2479,13 @@ const Invoices = () => {
                     value={checkAmount}
                     onChange={(e) => setCheckAmount(e.target.value)}
                   />
+                  {(Number(checkAmount) || 0) > 0 && (
+                    <Input
+                      placeholder="Check number *"
+                      value={createCheckNumber}
+                      onChange={(e) => setCreateCheckNumber(e.target.value)}
+                    />
+                  )}
                 </div>
                 <div className="space-y-2">
                   <Label>Credit</Label>
@@ -2488,7 +2607,7 @@ const Invoices = () => {
             </div>
             {payMethod === "check" && (
               <div className="space-y-2">
-                <Label>Check number</Label>
+                <Label>Check number *</Label>
                 <Input
                   className="h-11"
                   value={payCheckNumber}
@@ -2691,16 +2810,59 @@ const Invoices = () => {
                 <div>
                   <p className="font-medium mb-2">Payments</p>
                   <div className="space-y-1">
-                    {(viewInvoice.payments || []).map((p) => (
-                      <div key={p.id} className="flex justify-between text-muted-foreground">
-                        <span>
-                          {p.payment_method} · {p.payment_date}
-                        </span>
-                        <span className="text-foreground font-medium">
-                          ${Number(p.amount).toFixed(2)}
-                        </span>
-                      </div>
-                    ))}
+                    {(viewInvoice.payments || []).map((p) => {
+                      const bounced = Boolean(p.bounced_at);
+                      return (
+                        <div
+                          key={p.id}
+                          className={cn("rounded-md px-2 py-1", bounced && "bg-destructive/5")}
+                        >
+                          <div className="flex items-center justify-between gap-2 text-muted-foreground">
+                            <span className={cn("min-w-0 capitalize", bounced && "line-through")}>
+                              {p.payment_method}
+                              {p.check_number ? ` #${p.check_number}` : ""} · {p.payment_date}
+                            </span>
+                            <div className="flex shrink-0 items-center gap-2">
+                              {bounced && <Badge variant="destructive">BOUNCED</Badge>}
+                              <span
+                                className={cn(
+                                  "font-medium",
+                                  bounced ? "text-muted-foreground line-through" : "text-foreground"
+                                )}
+                              >
+                                ${Number(p.amount).toFixed(2)}
+                              </span>
+                            </div>
+                          </div>
+                          {bounced && (
+                            <p className="text-xs text-destructive">
+                              Bounced · marked by {personName(p.bounced_by)} on{" "}
+                              {new Date(p.bounced_at!).toLocaleDateString()}
+                              {p.bounce_reason ? ` · ${p.bounce_reason}` : ""}
+                            </p>
+                          )}
+                          {isAdmin && p.payment_method === "check" && !viewInvoice.local_sync && (
+                            <Button
+                              variant="link"
+                              size="sm"
+                              className={cn(
+                                "h-auto p-0 text-xs",
+                                bounced ? "text-muted-foreground" : "text-destructive"
+                              )}
+                              onClick={() => {
+                                setBounceReason("");
+                                setBounceTarget({
+                                  paymentId: p.id,
+                                  action: bounced ? "unbounce" : "bounce",
+                                });
+                              }}
+                            >
+                              {bounced ? "Undo bounce" : "Mark bounced"}
+                            </Button>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -2818,6 +2980,150 @@ const Invoices = () => {
           </AlertDialogFooter>
         </AlertDialogContent>
       </AlertDialog>
+
+      <AlertDialog
+        open={!!bounceTarget}
+        onOpenChange={(open) => {
+          if (!open && !bounceMutation.isPending) {
+            setBounceTarget(null);
+            setBounceReason("");
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {bounceTarget?.action === "unbounce" ? "Undo bounce for check" : "Mark check"}
+              {checkGroup?.check_number ? ` #${checkGroup.check_number}` : ""}
+              {bounceTarget?.action === "unbounce" ? "?" : " as bounced?"}
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-3 text-sm">
+                {checkGroupLoading || !checkGroup ? (
+                  <p>Loading check details…</p>
+                ) : (
+                  <>
+                    <p>
+                      {checkGroup.shop_name} · paid on {checkGroup.payment_date} · $
+                      {checkGroup.total.toFixed(2)}
+                    </p>
+                    <div className="rounded-md border">
+                      {checkGroup.payments.map((p) => (
+                        <div
+                          key={p.payment_id}
+                          className="flex justify-between border-b px-3 py-1.5 last:border-b-0"
+                        >
+                          <span>{p.invoice_number}</span>
+                          <span className="font-medium text-foreground">${p.amount.toFixed(2)}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <p>
+                      {bounceTarget?.action === "unbounce"
+                        ? "These payments will count as paid again."
+                        : checkGroup.payments.length > 1
+                          ? "This check paid all of these invoices. All of them go back to unpaid for this amount."
+                          : "This payment will stop counting as paid. It stays in the history marked BOUNCED."}
+                    </p>
+                    {bounceTarget?.action === "bounce" && (
+                      <div className="space-y-1">
+                        <Label htmlFor="bounce-reason">Reason (optional)</Label>
+                        <Textarea
+                          id="bounce-reason"
+                          rows={2}
+                          placeholder="e.g. Insufficient funds"
+                          value={bounceReason}
+                          onChange={(e) => setBounceReason(e.target.value)}
+                        />
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={bounceMutation.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className={
+                bounceTarget?.action === "bounce"
+                  ? "bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                  : undefined
+              }
+              disabled={bounceMutation.isPending || !checkGroup || !bounceTarget}
+              onClick={(e) => {
+                e.preventDefault();
+                if (bounceTarget) bounceMutation.mutate({ ...bounceTarget, reason: bounceReason });
+              }}
+            >
+              {bounceMutation.isPending
+                ? "Saving..."
+                : bounceTarget?.action === "unbounce"
+                  ? "Undo bounce"
+                  : "Mark bounced"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <Dialog open={bouncedListOpen} onOpenChange={setBouncedListOpen}>
+        <DialogContent className="max-h-[85vh] max-w-3xl overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Bounced checks</DialogTitle>
+          </DialogHeader>
+          {bouncedChecksLoading ? (
+            <p className="text-sm text-muted-foreground">Loading…</p>
+          ) : bouncedChecks.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No bounced checks.</p>
+          ) : (
+            <div className="rounded-md border overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Shop</TableHead>
+                    <TableHead>Check #</TableHead>
+                    <TableHead>Paid on</TableHead>
+                    <TableHead>Invoice</TableHead>
+                    <TableHead className="text-right">Amount</TableHead>
+                    <TableHead>Marked</TableHead>
+                    <TableHead>Reason</TableHead>
+                    <TableHead />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {bouncedChecks.map((row) => (
+                    <TableRow key={row.payment_id}>
+                      <TableCell className="font-medium">{row.shop_name}</TableCell>
+                      <TableCell>{row.check_number || "-"}</TableCell>
+                      <TableCell>{row.payment_date}</TableCell>
+                      <TableCell>{row.invoice_number}</TableCell>
+                      <TableCell className="text-right">${row.amount.toFixed(2)}</TableCell>
+                      <TableCell className="text-xs text-muted-foreground">
+                        {personName(row.bounced_by)}
+                        <br />
+                        {new Date(row.bounced_at).toLocaleDateString()}
+                      </TableCell>
+                      <TableCell className="text-xs">{row.bounce_reason || "-"}</TableCell>
+                      <TableCell>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            setBouncedListOpen(false);
+                            void openInvoiceDetails(row.invoice_id);
+                          }}
+                        >
+                          View
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
 
       <AlertDialog
         open={!!dropOffTarget}

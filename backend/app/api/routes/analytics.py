@@ -91,7 +91,7 @@ def _build_overview(
     if invoice_ids:
         collected = float(
             db.query(func.coalesce(func.sum(Payment.amount), 0))
-            .filter(Payment.invoice_id.in_(invoice_ids))
+            .filter(Payment.invoice_id.in_(invoice_ids), Payment.bounced_at.is_(None))
             .scalar()
             or 0
         )
@@ -214,7 +214,7 @@ def money_mix(
     invoice_ids = [row[0] for row in invoices]
     paid_map = dict(
         db.query(Payment.invoice_id, func.coalesce(func.sum(Payment.amount), 0))
-        .filter(Payment.invoice_id.in_(invoice_ids))
+        .filter(Payment.invoice_id.in_(invoice_ids), Payment.bounced_at.is_(None))
         .group_by(Payment.invoice_id)
         .all()
     )
@@ -469,7 +469,7 @@ def daily_sales(
         )
         .join(Invoice, Payment.invoice_id == Invoice.id)
         .join(Shop, Invoice.shop_id == Shop.id)
-        .filter(Shop.is_frozen.is_(False))
+        .filter(Shop.is_frozen.is_(False), Payment.bounced_at.is_(None))
     )
     if role not in (AppRole.admin, AppRole.srour):
         pay_q = pay_q.filter(Invoice.created_by == current_user.id)

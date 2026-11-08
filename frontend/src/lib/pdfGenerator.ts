@@ -14,6 +14,7 @@ interface Payment {
   payment_method: string;
   check_number?: string;
   notes?: string;
+  bounced_at?: string | null;
 }
 
 interface InvoiceData {
@@ -256,7 +257,7 @@ export const generateInvoicePDF = async (invoice: InvoiceData, totalPaid: number
       body: invoice.payments.map(payment => [
         format(new Date(payment.payment_date), "MMM dd, yyyy h:mm a"),
         `$${Number(payment.amount).toFixed(2)}`,
-        payment.payment_method,
+        payment.bounced_at ? `${payment.payment_method} (BOUNCED)` : payment.payment_method,
         payment.check_number || "-",
         payment.notes || "-"
       ]),

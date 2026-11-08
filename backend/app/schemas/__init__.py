@@ -1,7 +1,7 @@
 from datetime import date, datetime
 from uuid import UUID
 
-from pydantic import BaseModel, ConfigDict, EmailStr, Field
+from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
 
 from app.models import (
     AppRole,
@@ -14,6 +14,16 @@ from app.models import (
 
 class ORMModel(BaseModel):
     model_config = ConfigDict(from_attributes=True)
+
+
+class RequiresCheckNumber(BaseModel):
+    """Check payments must carry a check number so a bounce can be matched across invoices."""
+
+    @model_validator(mode="after")
+    def _check_number_for_checks(self):
+        if self.payment_method == PaymentMethod.check and not (self.check_number or "").strip():
+            raise ValueError("Check number is required for check payments")
+        return self
 
 
 class TokenResponse(BaseModel):
@@ -204,6 +214,8 @@ class InvoiceItemIn(BaseModel):
     warehouse: WarehouseCode | None = None
 
 
+# Not RequiresCheckNumber: invoices queued offline before that rule existed must still sync.
+# The create-invoice form enforces the check number instead.
 class PaymentIn(BaseModel):
     amount: float = Field(gt=0)
     payment_method: PaymentMethod
@@ -254,6 +266,9 @@ class PaymentOut(ORMModel):
     notes: str | None
     created_by: UUID
     created_at: datetime
+    bounced_at: datetime | None = None
+    bounced_by: UUID | None = None
+    bounce_reason: str | None = None
 
 
 class InvoiceOut(ORMModel):
@@ -358,7 +373,7 @@ class ShopListPage(BaseModel):
     frozen_count: int = 0
 
 
-class PaymentCreate(BaseModel):
+class PaymentCreate(RequiresCheckNumber):
     invoice_id: UUID
     amount: float = Field(gt=0)
     payment_method: PaymentMethod
@@ -519,7 +534,7 @@ class InvoiceEmailRequest(BaseModel):
     pdf_base64: str = Field(min_length=1)
 
 
-class DistributePaymentRequest(BaseModel):
+class DistributePaymentRequest(RequiresCheckNumber):
     shop_id: UUID
     amount: float = Field(gt=0)
     payment_method: PaymentMethod
@@ -531,6 +546,43 @@ class DistributePaymentRequest(BaseModel):
 class DistributePaymentResult(BaseModel):
     payments_created: int
     amount_applied: float
+
+
+class BounceRequest(BaseModel):
+    reason: str | None = Field(default=None, max_length=500)
+
+
+class CheckGroupPayment(BaseModel):
+    payment_id: UUID
+    invoice_id: UUID
+    invoice_number: str
+    amount: float
+    bounced_at: datetime | None = None
+
+
+class CheckGroupOut(BaseModel):
+    """Every payment row made with one physical check (same shop, check number, and date)."""
+
+    shop_id: UUID
+    shop_name: str
+    check_number: str | None
+    payment_date: date
+    total: float
+    payments: list[CheckGroupPayment]
+
+
+class BouncedCheckRow(BaseModel):
+    payment_id: UUID
+    invoice_id: UUID
+    invoice_number: str
+    shop_id: UUID
+    shop_name: str
+    amount: float
+    check_number: str | None
+    payment_date: date
+    bounced_at: datetime
+    bounced_by: UUID | None
+    bounce_reason: str | None
 
 
 class RetailerSignupCreate(BaseModel):

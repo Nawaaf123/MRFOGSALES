@@ -76,7 +76,9 @@ export async function api<T>(path: string, options: ApiOptions = {}): Promise<T>
     try {
       const data = await response.json();
       if (typeof data?.detail === "string") message = data.detail;
-      else if (Array.isArray(data?.detail)) message = data.detail[0]?.msg || message;
+      else if (Array.isArray(data?.detail)) {
+        message = String(data.detail[0]?.msg || message).replace(/^Value error, /, "");
+      }
     } catch {
       // ignore parse errors
     }

@@ -203,6 +203,10 @@ class Payment(Base):
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # A bounced check stays on record but no longer counts toward what was paid.
+    bounced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    bounced_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    bounce_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     invoice: Mapped[Invoice] = relationship(back_populates="payments")
 
