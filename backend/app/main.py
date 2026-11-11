@@ -75,6 +75,11 @@ async def lifespan(_: FastAPI):
             "ALTER TABLE payments ADD COLUMN IF NOT EXISTS bounce_reason TEXT",
             "CREATE INDEX IF NOT EXISTS ix_payments_bounced_at ON payments (bounced_at) "
             "WHERE bounced_at IS NOT NULL",
+            "ALTER TABLE payments ADD COLUMN IF NOT EXISTS voided_at TIMESTAMPTZ",
+            "ALTER TABLE payments ADD COLUMN IF NOT EXISTS voided_by UUID REFERENCES users(id)",
+            "ALTER TABLE payments ADD COLUMN IF NOT EXISTS void_reason TEXT",
+            "CREATE INDEX IF NOT EXISTS ix_payments_voided_at ON payments (voided_at) "
+            "WHERE voided_at IS NOT NULL",
         ]:
             conn.execute(text(statement))
 

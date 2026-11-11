@@ -1,4 +1,5 @@
 from datetime import date, datetime
+from typing import Literal
 from uuid import UUID
 
 from pydantic import BaseModel, ConfigDict, EmailStr, Field, model_validator
@@ -269,6 +270,9 @@ class PaymentOut(ORMModel):
     bounced_at: datetime | None = None
     bounced_by: UUID | None = None
     bounce_reason: str | None = None
+    voided_at: datetime | None = None
+    voided_by: UUID | None = None
+    void_reason: str | None = None
 
 
 class InvoiceOut(ORMModel):
@@ -552,37 +556,46 @@ class BounceRequest(BaseModel):
     reason: str | None = Field(default=None, max_length=500)
 
 
-class CheckGroupPayment(BaseModel):
+class VoidRequest(BaseModel):
+    reason: str = Field(min_length=1, max_length=500)
+
+
+class PaymentGroupItem(BaseModel):
     payment_id: UUID
     invoice_id: UUID
     invoice_number: str
     amount: float
     bounced_at: datetime | None = None
+    voided_at: datetime | None = None
 
 
-class CheckGroupOut(BaseModel):
-    """Every payment row made with one physical check (same shop, check number, and date)."""
+class PaymentGroupOut(BaseModel):
+    """Payment rows that belong together: one physical check, or one entry spread over invoices."""
 
     shop_id: UUID
     shop_name: str
+    payment_method: PaymentMethod
     check_number: str | None
     payment_date: date
+    recorded_by: UUID | None = None
     total: float
-    payments: list[CheckGroupPayment]
+    payments: list[PaymentGroupItem]
 
 
-class BouncedCheckRow(BaseModel):
+class ReversedPaymentRow(BaseModel):
     payment_id: UUID
+    kind: Literal["bounced", "voided"]
     invoice_id: UUID
     invoice_number: str
     shop_id: UUID
     shop_name: str
     amount: float
+    payment_method: PaymentMethod
     check_number: str | None
     payment_date: date
-    bounced_at: datetime
-    bounced_by: UUID | None
-    bounce_reason: str | None
+    reversed_at: datetime
+    reversed_by: UUID | None
+    reason: str | None
 
 
 class RetailerSignupCreate(BaseModel):

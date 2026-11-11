@@ -13,6 +13,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    and_,
     func,
 )
 from sqlalchemy.dialects.postgresql import UUID
@@ -207,8 +208,20 @@ class Payment(Base):
     bounced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
     bounced_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     bounce_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # A voided payment was entered by mistake; it also stays on record without counting.
+    voided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    voided_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    void_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     invoice: Mapped[Invoice] = relationship(back_populates="payments")
+
+    @property
+    def counts_as_paid(self) -> bool:
+        return self.bounced_at is None and self.voided_at is None
+
+
+# SQL filter for payments that count toward what an invoice has been paid.
+PAYMENT_COUNTS = and_(Payment.bounced_at.is_(None), Payment.voided_at.is_(None))
 
 
 class Order(Base):

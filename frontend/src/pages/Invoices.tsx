@@ -133,13 +133,18 @@ type InvoicePayment = {
   bounced_at?: string | null;
   bounced_by?: string | null;
   bounce_reason?: string | null;
+  voided_at?: string | null;
+  voided_by?: string | null;
+  void_reason?: string | null;
 };
 
-type CheckGroup = {
+type PaymentGroup = {
   shop_id: string;
   shop_name: string;
+  payment_method: PaymentMethod;
   check_number: string | null;
   payment_date: string;
+  recorded_by: string | null;
   total: number;
   payments: Array<{
     payment_id: string;
@@ -147,21 +152,26 @@ type CheckGroup = {
     invoice_number: string;
     amount: number;
     bounced_at: string | null;
+    voided_at: string | null;
   }>;
 };
 
-type BouncedCheckRow = {
+type ReversalAction = "bounce" | "unbounce" | "void" | "unvoid";
+
+type ReversedPaymentRow = {
   payment_id: string;
+  kind: "bounced" | "voided";
   invoice_id: string;
   invoice_number: string;
   shop_id: string;
   shop_name: string;
   amount: number;
+  payment_method: PaymentMethod;
   check_number: string | null;
   payment_date: string;
-  bounced_at: string;
-  bounced_by: string | null;
-  bounce_reason: string | null;
+  reversed_at: string;
+  reversed_by: string | null;
+  reason: string | null;
 };
 
 type WarehouseCode = "A" | "B";
@@ -397,10 +407,12 @@ const Invoices = () => {
   const [deleteConfirmStep, setDeleteConfirmStep] = useState<1 | 2>(1);
   const [bounceTarget, setBounceTarget] = useState<{
     paymentId: string;
-    action: "bounce" | "unbounce";
+    action: ReversalAction;
   } | null>(null);
   const [bounceReason, setBounceReason] = useState("");
   const [bouncedListOpen, setBouncedListOpen] = useState(false);
+  const isVoidAction = bounceTarget?.action === "void" || bounceTarget?.action === "unvoid";
+  const isUndoAction = bounceTarget?.action === "unbounce" || bounceTarget?.action === "unvoid";
   const [dropOffTarget, setDropOffTarget] = useState<{
     id: string;
     invoice_number: string;
@@ -1490,15 +1502,19 @@ const Invoices = () => {
     },
   });
 
+  // A bounce reverses one physical check; a void reverses one entry (which "Pay" may have split).
   const { data: checkGroup, isLoading: checkGroupLoading } = useQuery({
-    queryKey: ["check-group", bounceTarget?.paymentId],
-    queryFn: () => api<CheckGroup>(`/payments/${bounceTarget!.paymentId}/check-group`),
+    queryKey: ["check-group", bounceTarget?.paymentId, isVoidAction],
+    queryFn: () =>
+      api<PaymentGroup>(
+        `/payments/${bounceTarget!.paymentId}/${isVoidAction ? "entry-group" : "check-group"}`
+      ),
     enabled: Boolean(bounceTarget) && isAdmin,
   });
 
   const { data: bouncedChecks = [], isLoading: bouncedChecksLoading } = useQuery({
     queryKey: ["bounced-checks"],
-    queryFn: () => api<BouncedCheckRow[]>("/payments/bounced"),
+    queryFn: () => api<ReversedPaymentRow[]>("/payments/reversed"),
     enabled: bouncedListOpen && isAdmin,
   });
 
@@ -1515,10 +1531,13 @@ const Invoices = () => {
   };
 
   const bounceMutation = useMutation({
-    mutationFn: (target: { paymentId: string; action: "bounce" | "unbounce"; reason: string }) =>
-      api<CheckGroup>(`/payments/${target.paymentId}/${target.action}`, {
+    mutationFn: (target: { paymentId: string; action: ReversalAction; reason: string }) =>
+      api<PaymentGroup>(`/payments/${target.paymentId}/${target.action}`, {
         method: "POST",
-        body: target.action === "bounce" ? JSON.stringify({ reason: target.reason.trim() || null }) : undefined,
+        body:
+          target.action === "bounce" || target.action === "void"
+            ? JSON.stringify({ reason: target.reason.trim() || null })
+            : undefined,
       }),
     onSuccess: (_group, target) => {
       refetchInvoices();
@@ -1529,7 +1548,14 @@ const Invoices = () => {
       if (viewInvoice && !viewInvoice.local_sync) void openInvoiceDetails(viewInvoice.id);
       setBounceTarget(null);
       setBounceReason("");
-      toast({ title: target.action === "bounce" ? "Check marked bounced" : "Bounce undone" });
+      toast({
+        title: {
+          bounce: "Check marked bounced",
+          unbounce: "Bounce undone",
+          void: "Payment voided",
+          unvoid: "Void undone",
+        }[target.action],
+      });
     },
     onError: (error: ApiError) => {
       toast({ title: "Error", description: error.message, variant: "destructive" });
@@ -1653,7 +1679,7 @@ const Invoices = () => {
                     onClick={() => setBouncedListOpen(true)}
                   >
                     <AlertTriangle className="mr-2 h-4 w-4 text-destructive" />
-                    Bounced checks
+                    Reversed payments
                   </Button>
                 )}
                 <Button className="h-11 w-full shadow-sm shadow-primary/25 sm:w-auto" onClick={openCreateInvoice}>
@@ -2812,22 +2838,33 @@ const Invoices = () => {
                   <div className="space-y-1">
                     {(viewInvoice.payments || []).map((p) => {
                       const bounced = Boolean(p.bounced_at);
+                      const voided = Boolean(p.voided_at);
+                      const reversed = bounced || voided;
+                      const openReversal = (action: ReversalAction) => {
+                        setBounceReason("");
+                        setBounceTarget({ paymentId: p.id, action });
+                      };
                       return (
                         <div
                           key={p.id}
-                          className={cn("rounded-md px-2 py-1", bounced && "bg-destructive/5")}
+                          className={cn(
+                            "rounded-md px-2 py-1",
+                            bounced && "bg-destructive/5",
+                            voided && "bg-muted/60"
+                          )}
                         >
                           <div className="flex items-center justify-between gap-2 text-muted-foreground">
-                            <span className={cn("min-w-0 capitalize", bounced && "line-through")}>
+                            <span className={cn("min-w-0 capitalize", reversed && "line-through")}>
                               {p.payment_method}
                               {p.check_number ? ` #${p.check_number}` : ""} · {p.payment_date}
                             </span>
                             <div className="flex shrink-0 items-center gap-2">
                               {bounced && <Badge variant="destructive">BOUNCED</Badge>}
+                              {voided && <Badge variant="secondary">VOIDED</Badge>}
                               <span
                                 className={cn(
                                   "font-medium",
-                                  bounced ? "text-muted-foreground line-through" : "text-foreground"
+                                  reversed ? "text-muted-foreground line-through" : "text-foreground"
                                 )}
                               >
                                 ${Number(p.amount).toFixed(2)}
@@ -2841,24 +2878,56 @@ const Invoices = () => {
                               {p.bounce_reason ? ` · ${p.bounce_reason}` : ""}
                             </p>
                           )}
-                          {isAdmin && p.payment_method === "check" && !viewInvoice.local_sync && (
-                            <Button
-                              variant="link"
-                              size="sm"
-                              className={cn(
-                                "h-auto p-0 text-xs",
-                                bounced ? "text-muted-foreground" : "text-destructive"
+                          {voided && (
+                            <p className="text-xs text-muted-foreground">
+                              Voided by {personName(p.voided_by)} on{" "}
+                              {new Date(p.voided_at!).toLocaleDateString()}
+                              {p.void_reason ? ` · ${p.void_reason}` : ""}
+                            </p>
+                          )}
+                          {isAdmin && !viewInvoice.local_sync && (
+                            <div className="flex gap-3">
+                              {!reversed && (
+                                <Button
+                                  variant="link"
+                                  size="sm"
+                                  className="h-auto p-0 text-xs text-muted-foreground"
+                                  onClick={() => openReversal("void")}
+                                >
+                                  Void payment
+                                </Button>
                               )}
-                              onClick={() => {
-                                setBounceReason("");
-                                setBounceTarget({
-                                  paymentId: p.id,
-                                  action: bounced ? "unbounce" : "bounce",
-                                });
-                              }}
-                            >
-                              {bounced ? "Undo bounce" : "Mark bounced"}
-                            </Button>
+                              {!reversed && p.payment_method === "check" && (
+                                <Button
+                                  variant="link"
+                                  size="sm"
+                                  className="h-auto p-0 text-xs text-destructive"
+                                  onClick={() => openReversal("bounce")}
+                                >
+                                  Mark bounced
+                                </Button>
+                              )}
+                              {bounced && (
+                                <Button
+                                  variant="link"
+                                  size="sm"
+                                  className="h-auto p-0 text-xs text-muted-foreground"
+                                  onClick={() => openReversal("unbounce")}
+                                >
+                                  Undo bounce
+                                </Button>
+                              )}
+                              {voided && (
+                                <Button
+                                  variant="link"
+                                  size="sm"
+                                  className="h-auto p-0 text-xs text-muted-foreground"
+                                  onClick={() => openReversal("unvoid")}
+                                >
+                                  Undo void
+                                </Button>
+                              )}
+                            </div>
                           )}
                         </div>
                       );
@@ -2993,19 +3062,31 @@ const Invoices = () => {
         <AlertDialogContent>
           <AlertDialogHeader>
             <AlertDialogTitle>
-              {bounceTarget?.action === "unbounce" ? "Undo bounce for check" : "Mark check"}
-              {checkGroup?.check_number ? ` #${checkGroup.check_number}` : ""}
-              {bounceTarget?.action === "unbounce" ? "?" : " as bounced?"}
+              {
+                {
+                  bounce: `Mark check${checkGroup?.check_number ? ` #${checkGroup.check_number}` : ""} as bounced?`,
+                  unbounce: `Undo bounce for check${checkGroup?.check_number ? ` #${checkGroup.check_number}` : ""}?`,
+                  void: "Void this payment?",
+                  unvoid: "Undo void for this payment?",
+                }[bounceTarget?.action ?? "bounce"]
+              }
             </AlertDialogTitle>
             <AlertDialogDescription asChild>
               <div className="space-y-3 text-sm">
                 {checkGroupLoading || !checkGroup ? (
-                  <p>Loading check details…</p>
+                  <p>Loading payment details…</p>
                 ) : (
                   <>
+                    <p className="capitalize">
+                      {checkGroup.payment_method}
+                      {checkGroup.check_number ? ` #${checkGroup.check_number}` : ""} · $
+                      {checkGroup.total.toFixed(2)} · {checkGroup.payment_date}
+                    </p>
                     <p>
-                      {checkGroup.shop_name} · paid on {checkGroup.payment_date} · $
-                      {checkGroup.total.toFixed(2)}
+                      {checkGroup.shop_name}
+                      {isVoidAction && checkGroup.recorded_by
+                        ? ` · recorded by ${personName(checkGroup.recorded_by)}`
+                        : ""}
                     </p>
                     <div className="rounded-md border">
                       {checkGroup.payments.map((p) => (
@@ -3019,19 +3100,25 @@ const Invoices = () => {
                       ))}
                     </div>
                     <p>
-                      {bounceTarget?.action === "unbounce"
+                      {isUndoAction
                         ? "These payments will count as paid again."
                         : checkGroup.payments.length > 1
-                          ? "This check paid all of these invoices. All of them go back to unpaid for this amount."
-                          : "This payment will stop counting as paid. It stays in the history marked BOUNCED."}
+                          ? `This ${isVoidAction ? "payment" : "check"} was applied to all of these invoices. All of them go back to unpaid for this amount.`
+                          : `This payment will stop counting as paid. It stays in the history marked ${isVoidAction ? "VOIDED" : "BOUNCED"}.`}
                     </p>
-                    {bounceTarget?.action === "bounce" && (
+                    {(bounceTarget?.action === "bounce" || bounceTarget?.action === "void") && (
                       <div className="space-y-1">
-                        <Label htmlFor="bounce-reason">Reason (optional)</Label>
+                        <Label htmlFor="bounce-reason">
+                          {bounceTarget.action === "void" ? "Reason *" : "Reason (optional)"}
+                        </Label>
                         <Textarea
                           id="bounce-reason"
                           rows={2}
-                          placeholder="e.g. Insufficient funds"
+                          placeholder={
+                            bounceTarget.action === "void"
+                              ? "e.g. Recorded on wrong shop"
+                              : "e.g. Insufficient funds"
+                          }
                           value={bounceReason}
                           onChange={(e) => setBounceReason(e.target.value)}
                         />
@@ -3046,11 +3133,16 @@ const Invoices = () => {
             <AlertDialogCancel disabled={bounceMutation.isPending}>Cancel</AlertDialogCancel>
             <AlertDialogAction
               className={
-                bounceTarget?.action === "bounce"
+                bounceTarget?.action === "bounce" || bounceTarget?.action === "void"
                   ? "bg-destructive text-destructive-foreground hover:bg-destructive/90"
                   : undefined
               }
-              disabled={bounceMutation.isPending || !checkGroup || !bounceTarget}
+              disabled={
+                bounceMutation.isPending ||
+                !checkGroup ||
+                !bounceTarget ||
+                (bounceTarget.action === "void" && !bounceReason.trim())
+              }
               onClick={(e) => {
                 e.preventDefault();
                 if (bounceTarget) bounceMutation.mutate({ ...bounceTarget, reason: bounceReason });
@@ -3058,9 +3150,12 @@ const Invoices = () => {
             >
               {bounceMutation.isPending
                 ? "Saving..."
-                : bounceTarget?.action === "unbounce"
-                  ? "Undo bounce"
-                  : "Mark bounced"}
+                : {
+                    bounce: "Mark bounced",
+                    unbounce: "Undo bounce",
+                    void: "Void payment",
+                    unvoid: "Undo void",
+                  }[bounceTarget?.action ?? "bounce"]}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>
@@ -3069,23 +3164,24 @@ const Invoices = () => {
       <Dialog open={bouncedListOpen} onOpenChange={setBouncedListOpen}>
         <DialogContent className="max-h-[85vh] max-w-3xl overflow-y-auto">
           <DialogHeader>
-            <DialogTitle>Bounced checks</DialogTitle>
+            <DialogTitle>Reversed payments</DialogTitle>
           </DialogHeader>
           {bouncedChecksLoading ? (
             <p className="text-sm text-muted-foreground">Loading…</p>
           ) : bouncedChecks.length === 0 ? (
-            <p className="text-sm text-muted-foreground">No bounced checks.</p>
+            <p className="text-sm text-muted-foreground">No bounced or voided payments.</p>
           ) : (
             <div className="rounded-md border overflow-x-auto">
               <Table>
                 <TableHeader>
                   <TableRow>
+                    <TableHead>Type</TableHead>
                     <TableHead>Shop</TableHead>
-                    <TableHead>Check #</TableHead>
+                    <TableHead>Payment</TableHead>
                     <TableHead>Paid on</TableHead>
                     <TableHead>Invoice</TableHead>
                     <TableHead className="text-right">Amount</TableHead>
-                    <TableHead>Marked</TableHead>
+                    <TableHead>By</TableHead>
                     <TableHead>Reason</TableHead>
                     <TableHead />
                   </TableRow>
@@ -3093,17 +3189,27 @@ const Invoices = () => {
                 <TableBody>
                   {bouncedChecks.map((row) => (
                     <TableRow key={row.payment_id}>
+                      <TableCell>
+                        {row.kind === "bounced" ? (
+                          <Badge variant="destructive">Bounced</Badge>
+                        ) : (
+                          <Badge variant="secondary">Voided</Badge>
+                        )}
+                      </TableCell>
                       <TableCell className="font-medium">{row.shop_name}</TableCell>
-                      <TableCell>{row.check_number || "-"}</TableCell>
+                      <TableCell className="capitalize">
+                        {row.payment_method}
+                        {row.check_number ? ` #${row.check_number}` : ""}
+                      </TableCell>
                       <TableCell>{row.payment_date}</TableCell>
                       <TableCell>{row.invoice_number}</TableCell>
                       <TableCell className="text-right">${row.amount.toFixed(2)}</TableCell>
                       <TableCell className="text-xs text-muted-foreground">
-                        {personName(row.bounced_by)}
+                        {personName(row.reversed_by)}
                         <br />
-                        {new Date(row.bounced_at).toLocaleDateString()}
+                        {new Date(row.reversed_at).toLocaleDateString()}
                       </TableCell>
-                      <TableCell className="text-xs">{row.bounce_reason || "-"}</TableCell>
+                      <TableCell className="text-xs">{row.reason || "-"}</TableCell>
                       <TableCell>
                         <Button
                           variant="ghost"

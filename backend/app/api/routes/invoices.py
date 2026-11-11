@@ -15,6 +15,7 @@ from app.models import (
     AppRole,
     Invoice,
     InvoiceItem,
+    PAYMENT_COUNTS,
     Payment,
     PaymentMethod,
     PaymentStatus,
@@ -24,10 +25,7 @@ from app.models import (
     WarehouseCode,
 )
 from app.schemas import (
-    BouncedCheckRow,
     BounceRequest,
-    CheckGroupOut,
-    CheckGroupPayment,
     DistributePaymentRequest,
     DistributePaymentResult,
     InvoiceCreate,
@@ -39,8 +37,12 @@ from app.schemas import (
     InvoiceUpdate,
     LegacyBalanceCreate,
     PaymentCreate,
+    PaymentGroupItem,
+    PaymentGroupOut,
     PaymentOut,
+    ReversedPaymentRow,
     ShopBrief,
+    VoidRequest,
 )
 
 router = APIRouter(tags=["invoices"])
@@ -147,7 +149,7 @@ def paid_total(db: Session, invoice_id: UUID) -> float:
     """Money actually received on an invoice; bounced checks are excluded."""
     paid = (
         db.query(func.coalesce(func.sum(Payment.amount), 0))
-        .filter(Payment.invoice_id == invoice_id, Payment.bounced_at.is_(None))
+        .filter(Payment.invoice_id == invoice_id, PAYMENT_COUNTS)
         .scalar()
     )
     return float(paid or 0)
@@ -231,7 +233,7 @@ def paid_amounts_for_invoices(db: Session, invoice_ids: list[UUID]) -> dict[UUID
         return {}
     rows = (
         db.query(Payment.invoice_id, func.coalesce(func.sum(Payment.amount), 0))
-        .filter(Payment.invoice_id.in_(invoice_ids), Payment.bounced_at.is_(None))
+        .filter(Payment.invoice_id.in_(invoice_ids), PAYMENT_COUNTS)
         .group_by(Payment.invoice_id)
         .all()
     )
@@ -764,7 +766,7 @@ def distribute_payment(
     total_pending = 0.0
     pending_by_invoice: list[tuple[Invoice, float]] = []
     for invoice in invoices:
-        paid = sum(float(p.amount) for p in (invoice.payments or []) if p.bounced_at is None)
+        paid = sum(float(p.amount) for p in (invoice.payments or []) if p.counts_as_paid)
         pending = max(float(invoice.total_amount or 0) - paid, 0)
         if pending > 0:
             pending_by_invoice.append((invoice, pending))
@@ -852,13 +854,7 @@ def list_payments(
     return query.all()
 
 
-def _check_group(db: Session, payment_id: UUID) -> tuple[Payment, Shop, list[Payment]]:
-    """All payment rows made with the same physical check.
-
-    One check spread across a shop's invoices is stored as one row per invoice
-    with the same check number and date. Without a check number the rows can't
-    be matched, so only the selected row is returned.
-    """
+def _load_payment(db: Session, payment_id: UUID) -> Payment:
     payment = (
         db.query(Payment)
         .options(joinedload(Payment.invoice).joinedload(Invoice.shop))
@@ -867,6 +863,17 @@ def _check_group(db: Session, payment_id: UUID) -> tuple[Payment, Shop, list[Pay
     )
     if not payment:
         raise HTTPException(status_code=404, detail="Payment not found")
+    return payment
+
+
+def _check_group(db: Session, payment_id: UUID) -> tuple[Payment, Shop, list[Payment]]:
+    """All payment rows made with the same physical check.
+
+    One check spread across a shop's invoices is stored as one row per invoice
+    with the same check number and date. Without a check number the rows can't
+    be matched, so only the selected row is returned.
+    """
+    payment = _load_payment(db, payment_id)
     if payment.payment_method != PaymentMethod.check:
         raise HTTPException(status_code=400, detail="Only check payments can bounce")
     shop = payment.invoice.shop
@@ -890,104 +897,60 @@ def _check_group(db: Session, payment_id: UUID) -> tuple[Payment, Shop, list[Pay
     return payment, shop, group
 
 
-def _check_group_out(payment: Payment, shop: Shop, group: list[Payment]) -> CheckGroupOut:
-    return CheckGroupOut(
+def _entry_group(db: Session, payment_id: UUID) -> tuple[Payment, Shop, list[Payment]]:
+    """All payment rows saved by one entry.
+
+    "Pay" across a shop's invoices writes one row per invoice in a single
+    transaction, so the rows share created_at, recorder, method, and date.
+    """
+    payment = _load_payment(db, payment_id)
+    shop = payment.invoice.shop
+    group = (
+        db.query(Payment)
+        .options(joinedload(Payment.invoice))
+        .join(Invoice, Payment.invoice_id == Invoice.id)
+        .filter(
+            Invoice.shop_id == shop.id,
+            Payment.created_at == payment.created_at,
+            Payment.created_by == payment.created_by,
+            Payment.payment_method == payment.payment_method,
+            Payment.payment_date == payment.payment_date,
+        )
+        .order_by(Invoice.created_at.asc())
+        .with_for_update(of=Payment)
+        .all()
+    )
+    return payment, shop, group or [payment]
+
+
+def _group_out(payment: Payment, shop: Shop, group: list[Payment]) -> PaymentGroupOut:
+    return PaymentGroupOut(
         shop_id=shop.id,
         shop_name=shop.name,
+        payment_method=payment.payment_method,
         check_number=(payment.check_number or "").strip() or None,
         payment_date=payment.payment_date,
+        recorded_by=payment.created_by,
         total=round(sum(float(p.amount) for p in group), 2),
         payments=[
-            CheckGroupPayment(
+            PaymentGroupItem(
                 payment_id=p.id,
                 invoice_id=p.invoice_id,
                 invoice_number=p.invoice.invoice_number,
                 amount=float(p.amount),
                 bounced_at=p.bounced_at,
+                voided_at=p.voided_at,
             )
             for p in group
         ],
     )
 
 
-@router.get("/payments/bounced", response_model=list[BouncedCheckRow])
-def list_bounced_checks(
-    db: Session = Depends(get_db),
-    _: User = Depends(require_roles(AppRole.admin)),
-) -> list[BouncedCheckRow]:
-    rows = (
-        db.query(Payment)
-        .options(joinedload(Payment.invoice).joinedload(Invoice.shop))
-        .filter(Payment.bounced_at.is_not(None))
-        .order_by(Payment.bounced_at.desc())
-        .all()
-    )
-    return [
-        BouncedCheckRow(
-            payment_id=p.id,
-            invoice_id=p.invoice_id,
-            invoice_number=p.invoice.invoice_number,
-            shop_id=p.invoice.shop_id,
-            shop_name=p.invoice.shop.name if p.invoice.shop else "Unknown shop",
-            amount=float(p.amount),
-            check_number=p.check_number,
-            payment_date=p.payment_date,
-            bounced_at=p.bounced_at,
-            bounced_by=p.bounced_by,
-            bounce_reason=p.bounce_reason,
-        )
-        for p in rows
-    ]
-
-
-@router.get("/payments/{payment_id}/check-group", response_model=CheckGroupOut)
-def get_check_group(
-    payment_id: UUID,
-    db: Session = Depends(get_db),
-    _: User = Depends(require_roles(AppRole.admin)),
-) -> CheckGroupOut:
-    payment, shop, group = _check_group(db, payment_id)
-    return _check_group_out(payment, shop, group)
-
-
-@router.post("/payments/{payment_id}/bounce", response_model=CheckGroupOut)
-def bounce_check(
-    payment_id: UUID,
-    payload: BounceRequest,
-    db: Session = Depends(get_db),
-    current_user: User = Depends(require_roles(AppRole.admin)),
-) -> CheckGroupOut:
-    payment, shop, group = _check_group(db, payment_id)
-    to_bounce = [p for p in group if p.bounced_at is None]
-    if not to_bounce:
-        raise HTTPException(status_code=409, detail="This check is already marked bounced")
-    now = datetime.now(timezone.utc)
-    reason = (payload.reason or "").strip() or None
-    for p in to_bounce:
-        p.bounced_at = now
-        p.bounced_by = current_user.id
-        p.bounce_reason = reason
-    db.flush()
-    for invoice in {p.invoice for p in to_bounce}:
-        refresh_payment_status(db, invoice)
-    db.commit()
-    return _check_group_out(payment, shop, group)
-
-
-@router.post("/payments/{payment_id}/unbounce", response_model=CheckGroupOut)
-def unbounce_check(
-    payment_id: UUID,
-    db: Session = Depends(get_db),
-    _: User = Depends(require_roles(AppRole.admin)),
-) -> CheckGroupOut:
-    payment, shop, group = _check_group(db, payment_id)
-    to_clear = [p for p in group if p.bounced_at is not None]
-    if not to_clear:
-        raise HTTPException(status_code=409, detail="This check is not marked bounced")
-    # The shop may have paid again since the bounce; restoring the check must not overpay.
-    for invoice in {p.invoice for p in to_clear}:
-        restoring = sum(float(p.amount) for p in to_clear if p.invoice_id == invoice.id)
-        over = paid_total(db, invoice.id) + restoring - float(invoice.total_amount or 0)
+def _ensure_restore_fits(db: Session, restoring: list[Payment]) -> None:
+    """The shop may have paid again since the reversal; restoring must not overpay."""
+    for invoice in {p.invoice for p in restoring}:
+        amount = sum(float(p.amount) for p in restoring if p.invoice_id == invoice.id)
+        over = paid_total(db, invoice.id) + amount - float(invoice.total_amount or 0)
         if over > 0.01:
             raise HTTPException(
                 status_code=400,
@@ -996,12 +959,150 @@ def unbounce_check(
                     "The shop may already have paid again."
                 ),
             )
+
+
+def _refresh_statuses(db: Session, payments: list[Payment]) -> None:
+    db.flush()
+    for invoice in {p.invoice for p in payments}:
+        refresh_payment_status(db, invoice)
+
+
+@router.get("/payments/reversed", response_model=list[ReversedPaymentRow])
+def list_reversed_payments(
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles(AppRole.admin)),
+) -> list[ReversedPaymentRow]:
+    rows = (
+        db.query(Payment)
+        .options(joinedload(Payment.invoice).joinedload(Invoice.shop))
+        .filter(or_(Payment.bounced_at.is_not(None), Payment.voided_at.is_not(None)))
+        .all()
+    )
+    out = []
+    for p in rows:
+        bounced = p.bounced_at is not None
+        out.append(
+            ReversedPaymentRow(
+                payment_id=p.id,
+                kind="bounced" if bounced else "voided",
+                invoice_id=p.invoice_id,
+                invoice_number=p.invoice.invoice_number,
+                shop_id=p.invoice.shop_id,
+                shop_name=p.invoice.shop.name if p.invoice.shop else "Unknown shop",
+                amount=float(p.amount),
+                payment_method=p.payment_method,
+                check_number=p.check_number,
+                payment_date=p.payment_date,
+                reversed_at=p.bounced_at if bounced else p.voided_at,
+                reversed_by=p.bounced_by if bounced else p.voided_by,
+                reason=p.bounce_reason if bounced else p.void_reason,
+            )
+        )
+    out.sort(key=lambda r: r.reversed_at, reverse=True)
+    return out
+
+
+@router.get("/payments/{payment_id}/check-group", response_model=PaymentGroupOut)
+def get_check_group(
+    payment_id: UUID,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles(AppRole.admin)),
+) -> PaymentGroupOut:
+    payment, shop, group = _check_group(db, payment_id)
+    return _group_out(payment, shop, group)
+
+
+@router.get("/payments/{payment_id}/entry-group", response_model=PaymentGroupOut)
+def get_entry_group(
+    payment_id: UUID,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles(AppRole.admin)),
+) -> PaymentGroupOut:
+    payment, shop, group = _entry_group(db, payment_id)
+    return _group_out(payment, shop, group)
+
+
+@router.post("/payments/{payment_id}/bounce", response_model=PaymentGroupOut)
+def bounce_check(
+    payment_id: UUID,
+    payload: BounceRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(AppRole.admin)),
+) -> PaymentGroupOut:
+    payment, shop, group = _check_group(db, payment_id)
+    to_bounce = [p for p in group if p.counts_as_paid]
+    if not to_bounce:
+        raise HTTPException(status_code=409, detail="This check is already bounced or voided")
+    now = datetime.now(timezone.utc)
+    reason = (payload.reason or "").strip() or None
+    for p in to_bounce:
+        p.bounced_at = now
+        p.bounced_by = current_user.id
+        p.bounce_reason = reason
+    _refresh_statuses(db, to_bounce)
+    db.commit()
+    return _group_out(payment, shop, group)
+
+
+@router.post("/payments/{payment_id}/unbounce", response_model=PaymentGroupOut)
+def unbounce_check(
+    payment_id: UUID,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles(AppRole.admin)),
+) -> PaymentGroupOut:
+    payment, shop, group = _check_group(db, payment_id)
+    to_clear = [p for p in group if p.bounced_at is not None]
+    if not to_clear:
+        raise HTTPException(status_code=409, detail="This check is not marked bounced")
+    _ensure_restore_fits(db, [p for p in to_clear if p.voided_at is None])
     for p in to_clear:
         p.bounced_at = None
         p.bounced_by = None
         p.bounce_reason = None
-    db.flush()
-    for invoice in {p.invoice for p in to_clear}:
-        refresh_payment_status(db, invoice)
+    _refresh_statuses(db, to_clear)
     db.commit()
-    return _check_group_out(payment, shop, group)
+    return _group_out(payment, shop, group)
+
+
+@router.post("/payments/{payment_id}/void", response_model=PaymentGroupOut)
+def void_payment(
+    payment_id: UUID,
+    payload: VoidRequest,
+    db: Session = Depends(get_db),
+    current_user: User = Depends(require_roles(AppRole.admin)),
+) -> PaymentGroupOut:
+    reason = payload.reason.strip()
+    if not reason:
+        raise HTTPException(status_code=400, detail="Enter a reason for voiding this payment")
+    payment, shop, group = _entry_group(db, payment_id)
+    to_void = [p for p in group if p.counts_as_paid]
+    if not to_void:
+        raise HTTPException(status_code=409, detail="This payment is already voided or bounced")
+    now = datetime.now(timezone.utc)
+    for p in to_void:
+        p.voided_at = now
+        p.voided_by = current_user.id
+        p.void_reason = reason
+    _refresh_statuses(db, to_void)
+    db.commit()
+    return _group_out(payment, shop, group)
+
+
+@router.post("/payments/{payment_id}/unvoid", response_model=PaymentGroupOut)
+def unvoid_payment(
+    payment_id: UUID,
+    db: Session = Depends(get_db),
+    _: User = Depends(require_roles(AppRole.admin)),
+) -> PaymentGroupOut:
+    payment, shop, group = _entry_group(db, payment_id)
+    to_clear = [p for p in group if p.voided_at is not None]
+    if not to_clear:
+        raise HTTPException(status_code=409, detail="This payment is not voided")
+    _ensure_restore_fits(db, [p for p in to_clear if p.bounced_at is None])
+    for p in to_clear:
+        p.voided_at = None
+        p.voided_by = None
+        p.void_reason = None
+    _refresh_statuses(db, to_clear)
+    db.commit()
+    return _group_out(payment, shop, group)
