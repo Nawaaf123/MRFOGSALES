@@ -2,8 +2,8 @@
 
 variable "rds_instance_class" {
   type        = string
-  default     = "db.t4g.micro"
-  description = "RDS size. db.t4g.micro (2 vCPU burst, 1 GB) fits the current ~15 MB database."
+  default     = "db.t4g.small"
+  description = "RDS size. db.t4g.small (2 vCPU burst, 2 GB). Resizing restarts the database for a few minutes."
 }
 
 variable "rds_multi_az" {
