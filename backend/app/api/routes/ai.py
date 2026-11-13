@@ -16,6 +16,7 @@ from app.models import (
     AppRole,
     Invoice,
     InvoiceItem,
+    PAYMENT_COUNTS,
     Payment,
     PaymentStatus,
     Product,
@@ -267,7 +268,7 @@ def _tool_shop_balances(db: Session, user: User, limit: int = 15) -> list[dict]:
     ids = [inv.id for inv in invoices]
     rows = (
         db.query(Payment.invoice_id, func.coalesce(func.sum(Payment.amount), 0))
-        .filter(Payment.invoice_id.in_(ids))
+        .filter(Payment.invoice_id.in_(ids), PAYMENT_COUNTS)
         .group_by(Payment.invoice_id)
         .all()
     )

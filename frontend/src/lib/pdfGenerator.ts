@@ -14,6 +14,8 @@ interface Payment {
   payment_method: string;
   check_number?: string;
   notes?: string;
+  bounced_at?: string | null;
+  voided_at?: string | null;
 }
 
 interface InvoiceData {
@@ -240,8 +242,9 @@ export const generateInvoicePDF = async (invoice: InvoiceData, totalPaid: number
   
   yPos = boxY + boxHeight + 10;
   
-  // Payment History
-  if (invoice.payments && invoice.payments.length > 0) {
+  // Payment History (voided payments were entry mistakes, so the customer never sees them)
+  const shownPayments = (invoice.payments || []).filter((p) => !p.voided_at);
+  if (shownPayments.length > 0) {
     // Heading plus the table header and first row stay together.
     yPos = ensureSpace(yPos, 22);
     doc.setTextColor(...darkColor);
@@ -253,10 +256,10 @@ export const generateInvoicePDF = async (invoice: InvoiceData, totalPaid: number
     autoTable(doc, {
       startY: yPos,
       head: [["Date", "Amount", "Method", "Check #", "Notes"]],
-      body: invoice.payments.map(payment => [
+      body: shownPayments.map(payment => [
         format(new Date(payment.payment_date), "MMM dd, yyyy h:mm a"),
         `$${Number(payment.amount).toFixed(2)}`,
-        payment.payment_method,
+        payment.bounced_at ? `${payment.payment_method} (BOUNCED)` : payment.payment_method,
         payment.check_number || "-",
         payment.notes || "-"
       ]),

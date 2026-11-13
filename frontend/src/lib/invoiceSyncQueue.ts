@@ -21,7 +21,7 @@ export type InvoiceSyncQueueItem = {
     subtotal: number;
     warehouse?: "A" | "B";
   }>;
-  payments: Array<{ amount: number; payment_method: InvoiceSyncPaymentMethod }>;
+  payments: Array<{ amount: number; payment_method: InvoiceSyncPaymentMethod; check_number?: string }>;
   total_amount: number;
   amount_paid: number;
   payment_status: "paid" | "partial" | "unpaid";

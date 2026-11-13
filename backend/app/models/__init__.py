@@ -13,6 +13,7 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    and_,
     func,
 )
 from sqlalchemy.dialects.postgresql import UUID
@@ -158,6 +159,11 @@ class Invoice(Base):
     warehouse: Mapped[WarehouseCode | None] = mapped_column(
         Enum(WarehouseCode, name="warehouse_code", create_type=False), nullable=True
     )
+    # Null until someone confirms the goods reached the shop.
+    dropped_off_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    dropped_off_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    drop_off_undone_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    drop_off_undone_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True), server_default=func.now(), onupdate=func.now()
@@ -198,8 +204,24 @@ class Payment(Base):
     notes: Mapped[str | None] = mapped_column(Text, nullable=True)
     created_by: Mapped[uuid.UUID] = mapped_column(ForeignKey("users.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now())
+    # A bounced check stays on record but no longer counts toward what was paid.
+    bounced_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    bounced_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    bounce_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
+    # A voided payment was entered by mistake; it also stays on record without counting.
+    voided_at: Mapped[datetime | None] = mapped_column(DateTime(timezone=True), nullable=True)
+    voided_by: Mapped[uuid.UUID | None] = mapped_column(ForeignKey("users.id"), nullable=True)
+    void_reason: Mapped[str | None] = mapped_column(Text, nullable=True)
 
     invoice: Mapped[Invoice] = relationship(back_populates="payments")
+
+    @property
+    def counts_as_paid(self) -> bool:
+        return self.bounced_at is None and self.voided_at is None
+
+
+# SQL filter for payments that count toward what an invoice has been paid.
+PAYMENT_COUNTS = and_(Payment.bounced_at.is_(None), Payment.voided_at.is_(None))
 
 
 class Order(Base):

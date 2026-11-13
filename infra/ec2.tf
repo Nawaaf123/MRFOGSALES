@@ -2,9 +2,11 @@ data "aws_ami" "al2023" {
   most_recent = true
   owners      = ["amazon"]
 
+  # Standard AL2023 only; "al2023-ami-*" also matches the ECS-optimized image,
+  # which ships an ECS agent this host does not use.
   filter {
     name   = "name"
-    values = ["al2023-ami-*-x86_64"]
+    values = ["al2023-ami-2023.*-kernel-*-x86_64"]
   }
 
   filter {
@@ -50,6 +52,16 @@ resource "aws_security_group" "app" {
     cidr_blocks = [var.allowed_ssh_cidr]
   }
 
+  # HTTPS lives inline with the other rules. A separate aws_security_group_rule
+  # for the same port made every plan try to delete it from this list.
+  ingress {
+    description = "HTTPS"
+    from_port   = 443
+    to_port     = 443
+    protocol    = "tcp"
+    cidr_blocks = ["0.0.0.0/0"]
+  }
+
   egress {
     from_port   = 0
     to_port     = 0
@@ -64,15 +76,14 @@ resource "aws_security_group" "app" {
   }
 }
 
-# Separate rule so adding HTTPS does not replace the security group (avoids attach deadlock).
-resource "aws_security_group_rule" "https" {
-  type              = "ingress"
-  description       = "HTTPS"
-  from_port         = 443
-  to_port           = 443
-  protocol          = "tcp"
-  cidr_blocks       = ["0.0.0.0/0"]
-  security_group_id = aws_security_group.app.id
+# The HTTPS rule used to be its own resource; forget it without deleting the
+# live rule, which the inline ingress block above now owns.
+removed {
+  from = aws_security_group_rule.https
+
+  lifecycle {
+    destroy = false
+  }
 }
 
 resource "aws_instance" "app" {
@@ -110,6 +121,14 @@ resource "aws_instance" "app" {
   EOF
 
   tags = { Name = "${local.name}-app" }
+
+  # Postgres lives on this instance's root volume. A newer AMI or edited
+  # user_data must never trigger a replacement; prevent_destroy makes any
+  # plan that would destroy it fail instead.
+  lifecycle {
+    ignore_changes  = [ami, user_data]
+    prevent_destroy = true
+  }
 }
 
 resource "aws_eip" "app" {

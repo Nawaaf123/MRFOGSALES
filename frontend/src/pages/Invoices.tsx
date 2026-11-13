@@ -88,7 +88,19 @@ import { ShopSearchSelect } from "@/components/shops/ShopSearchSelect";
 import { PageHero } from "@/components/ui/PageHero";
 import { EmptyState } from "@/components/ui/EmptyState";
 import { cn } from "@/lib/utils";
-import { Check, ChevronsUpDown, CloudOff, FileText, Plus, RefreshCw, ScanLine, Sparkles, Trash2 } from "lucide-react";
+import {
+  AlertTriangle,
+  Check,
+  ChevronsUpDown,
+  CloudOff,
+  FileText,
+  Plus,
+  RefreshCw,
+  ScanLine,
+  Sparkles,
+  Trash2,
+  Truck,
+} from "lucide-react";
 
 type Product = {
   id: string;
@@ -116,6 +128,50 @@ type InvoicePayment = {
   amount: number;
   payment_method: PaymentMethod;
   payment_date: string;
+  check_number?: string | null;
+  notes?: string | null;
+  bounced_at?: string | null;
+  bounced_by?: string | null;
+  bounce_reason?: string | null;
+  voided_at?: string | null;
+  voided_by?: string | null;
+  void_reason?: string | null;
+};
+
+type PaymentGroup = {
+  shop_id: string;
+  shop_name: string;
+  payment_method: PaymentMethod;
+  check_number: string | null;
+  payment_date: string;
+  recorded_by: string | null;
+  total: number;
+  payments: Array<{
+    payment_id: string;
+    invoice_id: string;
+    invoice_number: string;
+    amount: number;
+    bounced_at: string | null;
+    voided_at: string | null;
+  }>;
+};
+
+type ReversalAction = "bounce" | "unbounce" | "void" | "unvoid";
+
+type ReversedPaymentRow = {
+  payment_id: string;
+  kind: "bounced" | "voided";
+  invoice_id: string;
+  invoice_number: string;
+  shop_id: string;
+  shop_name: string;
+  amount: number;
+  payment_method: PaymentMethod;
+  check_number: string | null;
+  payment_date: string;
+  reversed_at: string;
+  reversed_by: string | null;
+  reason: string | null;
 };
 
 type WarehouseCode = "A" | "B";
@@ -154,6 +210,10 @@ type Invoice = {
   payment_status: PaymentStatus;
   notes: string | null;
   warehouse: "A" | "B" | null;
+  dropped_off_at?: string | null;
+  dropped_off_by?: string | null;
+  drop_off_undone_at?: string | null;
+  drop_off_undone_by?: string | null;
   created_at: string;
   items?: InvoiceItem[];
   payments?: InvoicePayment[];
@@ -295,6 +355,7 @@ const Invoices = () => {
   const [search, setSearch] = useState("");
   const [debouncedSearch, setDebouncedSearch] = useState("");
   const [statusFilter, setStatusFilter] = useState("all");
+  const [dropOffFilter, setDropOffFilter] = useState<"all" | "pending" | "done">("all");
   const [shopFilter, setShopFilter] = useState("all");
   const [shopFilterLabel, setShopFilterLabel] = useState<string | null>(null);
   const [page, setPage] = useState(1);
@@ -306,7 +367,7 @@ const Invoices = () => {
 
   useEffect(() => {
     setPage(1);
-  }, [debouncedSearch, statusFilter, shopFilter]);
+  }, [debouncedSearch, statusFilter, dropOffFilter, shopFilter]);
 
   const [createOpen, setCreateOpen] = useState(false);
   const [editingInvoiceId, setEditingInvoiceId] = useState<string | null>(null);
@@ -332,6 +393,7 @@ const Invoices = () => {
   const [cashAmount, setCashAmount] = useState("");
   const [checkAmount, setCheckAmount] = useState("");
   const [creditAmount, setCreditAmount] = useState("");
+  const [createCheckNumber, setCreateCheckNumber] = useState("");
 
   const [paymentInvoice, setPaymentInvoice] = useState<Invoice | null>(null);
   const [payAmount, setPayAmount] = useState("");
@@ -343,6 +405,19 @@ const Invoices = () => {
   const [viewInvoice, setViewInvoice] = useState<Invoice | null>(null);
   const [deleteInvoice, setDeleteInvoice] = useState<Invoice | null>(null);
   const [deleteConfirmStep, setDeleteConfirmStep] = useState<1 | 2>(1);
+  const [bounceTarget, setBounceTarget] = useState<{
+    paymentId: string;
+    action: ReversalAction;
+  } | null>(null);
+  const [bounceReason, setBounceReason] = useState("");
+  const [bouncedListOpen, setBouncedListOpen] = useState(false);
+  const isVoidAction = bounceTarget?.action === "void" || bounceTarget?.action === "unvoid";
+  const isUndoAction = bounceTarget?.action === "unbounce" || bounceTarget?.action === "unvoid";
+  const [dropOffTarget, setDropOffTarget] = useState<{
+    id: string;
+    invoice_number: string;
+    action: "mark" | "undo";
+  } | null>(null);
   const [emailingId, setEmailingId] = useState<string | null>(null);
 
   const [distributeTarget, setDistributeTarget] = useState<{
@@ -356,9 +431,10 @@ const Invoices = () => {
     () => ({
       search: debouncedSearch || undefined,
       payment_status: statusFilter !== "all" ? statusFilter : undefined,
+      drop_off: dropOffFilter !== "all" ? dropOffFilter : undefined,
       shop_id: shopFilter !== "all" ? shopFilter : undefined,
     }),
-    [debouncedSearch, statusFilter, shopFilter]
+    [debouncedSearch, statusFilter, dropOffFilter, shopFilter]
   );
 
   const {
@@ -509,6 +585,9 @@ const Invoices = () => {
     return [];
   }, [profiles, user]);
 
+  const personName = (id: string | null | undefined) =>
+    (id && profilesForNames.find((p) => p.id === id)?.full_name) || "Unknown";
+
   const shopGroups = useMemo(() => {
     const map = new Map<
       string,
@@ -545,6 +624,8 @@ const Invoices = () => {
     for (const local of localPendingInvoices) {
       if (shopFilter !== "all" && local.shop_id !== shopFilter) continue;
       if (statusFilter !== "all" && local.payment_status !== statusFilter) continue;
+      // Offline creates haven't reached the server, so they can't be dropped off yet.
+      if (dropOffFilter === "done") continue;
       if (debouncedSearch) {
         const q = debouncedSearch.toLowerCase();
         const hay = `${local.invoice_number} ${local.shop?.name || ""}`.toLowerCase();
@@ -575,7 +656,7 @@ const Invoices = () => {
         (a, b) =>
           b.latestAt - a.latestAt || b.pending - a.pending || a.shopName.localeCompare(b.shopName)
       );
-  }, [invoices, localPendingInvoices, shopFilter, statusFilter, debouncedSearch]);
+  }, [invoices, localPendingInvoices, shopFilter, statusFilter, dropOffFilter, debouncedSearch]);
 
   const pagedShopGroups = useMemo(() => {
     const start = (page - 1) * SHOP_GROUPS_PER_PAGE;
@@ -620,6 +701,7 @@ const Invoices = () => {
     setCreateSubcategoryFilter("all");
     setCashAmount("");
     setCheckAmount("");
+    setCreateCheckNumber("");
     setCreditAmount("");
     if (opts?.clearDraft !== false && user?.id) {
       clearInvoiceCreateDraft(user.id);
@@ -656,7 +738,21 @@ const Invoices = () => {
     setCreateSubcategoryFilter("all");
     setCashAmount(draft.cash_amount || "");
     setCheckAmount(draft.check_amount || "");
+    setCreateCheckNumber(draft.check_number || "");
     setCreditAmount(draft.credit_amount || "");
+  };
+
+  const buildCreatePayments = () => {
+    const payments: Array<{ amount: number; payment_method: PaymentMethod; check_number?: string }> = [];
+    const cash = Number(cashAmount) || 0;
+    const check = Number(checkAmount) || 0;
+    const credit = Number(creditAmount) || 0;
+    if (cash > 0) payments.push({ amount: cash, payment_method: "cash" });
+    if (check > 0) {
+      payments.push({ amount: check, payment_method: "check", check_number: createCheckNumber.trim() });
+    }
+    if (credit > 0) payments.push({ amount: credit, payment_method: "credit" });
+    return payments;
   };
 
   const openCreateInvoice = () => {
@@ -786,6 +882,7 @@ const Invoices = () => {
         items,
         cash_amount: cashAmount,
         check_amount: checkAmount,
+        check_number: createCheckNumber,
         credit_amount: creditAmount,
         updated_at: new Date().toISOString(),
       };
@@ -804,6 +901,7 @@ const Invoices = () => {
     items,
     cashAmount,
     checkAmount,
+    createCheckNumber,
     creditAmount,
   ]);
 
@@ -1018,13 +1116,7 @@ const Invoices = () => {
       clientRequestIdRef.current = newClientRequestId();
     }
 
-    const payments: Array<{ amount: number; payment_method: PaymentMethod }> = [];
-    const cash = Number(cashAmount) || 0;
-    const check = Number(checkAmount) || 0;
-    const credit = Number(creditAmount) || 0;
-    if (cash > 0) payments.push({ amount: cash, payment_method: "cash" });
-    if (check > 0) payments.push({ amount: check, payment_method: "check" });
-    if (credit > 0) payments.push({ amount: credit, payment_method: "credit" });
+    const payments = buildCreatePayments();
 
     const shopName = selectedShopName.trim() || "Unknown shop";
     const queueItem = buildSyncQueueItem({
@@ -1065,14 +1157,11 @@ const Invoices = () => {
         clientRequestIdRef.current = newClientRequestId();
       }
       if (!user?.id) throw { message: "Not signed in" } satisfies ApiError;
+      if ((Number(checkAmount) || 0) > 0 && !createCheckNumber.trim()) {
+        throw { message: "Enter the check number" } satisfies ApiError;
+      }
 
-      const payments: Array<{ amount: number; payment_method: PaymentMethod }> = [];
-      const cash = Number(cashAmount) || 0;
-      const check = Number(checkAmount) || 0;
-      const credit = Number(creditAmount) || 0;
-      if (cash > 0) payments.push({ amount: cash, payment_method: "cash" });
-      if (check > 0) payments.push({ amount: check, payment_method: "check" });
-      if (credit > 0) payments.push({ amount: credit, payment_method: "credit" });
+      const payments = buildCreatePayments();
 
       // Persist working draft, then always enqueue first (safe with client_request_id).
       saveInvoiceCreateDraft(user.id, {
@@ -1085,6 +1174,7 @@ const Invoices = () => {
         items,
         cash_amount: cashAmount,
         check_amount: checkAmount,
+        check_number: createCheckNumber,
         credit_amount: creditAmount,
         updated_at: new Date().toISOString(),
       });
@@ -1333,6 +1423,9 @@ const Invoices = () => {
       if (amount > remaining + 0.01) {
         throw { message: "Amount cannot exceed remaining balance" } satisfies ApiError;
       }
+      if (payMethod === "check" && !payCheckNumber.trim()) {
+        throw { message: "Enter the check number" } satisfies ApiError;
+      }
       return api("/payments", {
         method: "POST",
         body: JSON.stringify({
@@ -1369,6 +1462,100 @@ const Invoices = () => {
       setDeleteInvoice(null);
       setDeleteConfirmStep(1);
       toast({ title: "Invoice deleted" });
+    },
+    onError: (error: ApiError) => {
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
+
+  const dropOffMutation = useMutation({
+    mutationFn: (target: { id: string; action: "mark" | "undo" }) =>
+      api<Invoice>(
+        target.action === "mark"
+          ? `/invoices/${target.id}/drop-off`
+          : `/invoices/${target.id}/drop-off/undo`,
+        { method: "POST" }
+      ),
+    onSuccess: (row, target) => {
+      refetchInvoices();
+      setViewInvoice((current) =>
+        current && current.id === row.id
+          ? {
+              ...current,
+              dropped_off_at: row.dropped_off_at,
+              dropped_off_by: row.dropped_off_by,
+              drop_off_undone_at: row.drop_off_undone_at,
+              drop_off_undone_by: row.drop_off_undone_by,
+            }
+          : current
+      );
+      setDropOffTarget(null);
+      toast({
+        title: target.action === "mark" ? "Marked dropped off" : "Drop-off undone",
+        description: row.invoice_number,
+      });
+    },
+    onError: (error: ApiError) => {
+      setDropOffTarget(null);
+      refetchInvoices();
+      toast({ title: "Error", description: error.message, variant: "destructive" });
+    },
+  });
+
+  // A bounce reverses one physical check; a void reverses one entry (which "Pay" may have split).
+  const { data: checkGroup, isLoading: checkGroupLoading } = useQuery({
+    queryKey: ["check-group", bounceTarget?.paymentId, isVoidAction],
+    queryFn: () =>
+      api<PaymentGroup>(
+        `/payments/${bounceTarget!.paymentId}/${isVoidAction ? "entry-group" : "check-group"}`
+      ),
+    enabled: Boolean(bounceTarget) && isAdmin,
+  });
+
+  const { data: bouncedChecks = [], isLoading: bouncedChecksLoading } = useQuery({
+    queryKey: ["bounced-checks"],
+    queryFn: () => api<ReversedPaymentRow[]>("/payments/reversed"),
+    enabled: bouncedListOpen && isAdmin,
+  });
+
+  const openInvoiceDetails = async (invoiceId: string) => {
+    try {
+      setViewInvoice(await api<Invoice>(`/invoices/${invoiceId}`));
+    } catch (error: unknown) {
+      toast({
+        title: "Error",
+        description: (error as ApiError)?.message || "Could not load invoice",
+        variant: "destructive",
+      });
+    }
+  };
+
+  const bounceMutation = useMutation({
+    mutationFn: (target: { paymentId: string; action: ReversalAction; reason: string }) =>
+      api<PaymentGroup>(`/payments/${target.paymentId}/${target.action}`, {
+        method: "POST",
+        body:
+          target.action === "bounce" || target.action === "void"
+            ? JSON.stringify({ reason: target.reason.trim() || null })
+            : undefined,
+      }),
+    onSuccess: (_group, target) => {
+      refetchInvoices();
+      queryClient.invalidateQueries({ queryKey: ["bounced-checks"] });
+      queryClient.invalidateQueries({ queryKey: ["check-group"] });
+      queryClient.invalidateQueries({ queryKey: ["dashboard-stats"] });
+      queryClient.invalidateQueries({ queryKey: ["pending-payments"] });
+      if (viewInvoice && !viewInvoice.local_sync) void openInvoiceDetails(viewInvoice.id);
+      setBounceTarget(null);
+      setBounceReason("");
+      toast({
+        title: {
+          bounce: "Check marked bounced",
+          unbounce: "Bounce undone",
+          void: "Payment voided",
+          unvoid: "Void undone",
+        }[target.action],
+      });
     },
     onError: (error: ApiError) => {
       toast({ title: "Error", description: error.message, variant: "destructive" });
@@ -1484,10 +1671,22 @@ const Invoices = () => {
           ]}
           action={
             canCreate ? (
-              <Button className="h-11 w-full shadow-sm shadow-primary/25 sm:w-auto" onClick={openCreateInvoice}>
-                <Plus className="mr-2 h-4 w-4" />
-                New Invoice
-              </Button>
+              <div className="flex w-full flex-col gap-2 sm:w-auto sm:flex-row">
+                {isAdmin && (
+                  <Button
+                    variant="outline"
+                    className="h-11 w-full sm:w-auto"
+                    onClick={() => setBouncedListOpen(true)}
+                  >
+                    <AlertTriangle className="mr-2 h-4 w-4 text-destructive" />
+                    Reversed payments
+                  </Button>
+                )}
+                <Button className="h-11 w-full shadow-sm shadow-primary/25 sm:w-auto" onClick={openCreateInvoice}>
+                  <Plus className="mr-2 h-4 w-4" />
+                  New Invoice
+                </Button>
+              </div>
             ) : undefined
           }
         />
@@ -1523,7 +1722,7 @@ const Invoices = () => {
         )}
 
         <Card className="border-primary/10 p-4">
-          <div className="grid grid-cols-1 gap-4 md:grid-cols-3">
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 lg:grid-cols-4">
             <div className="space-y-2">
               <Label>Search</Label>
               <Input
@@ -1544,6 +1743,22 @@ const Invoices = () => {
                   <SelectItem value="unpaid">Unpaid</SelectItem>
                   <SelectItem value="partial">Partial</SelectItem>
                   <SelectItem value="paid">Paid</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label>Drop-off</Label>
+              <Select
+                value={dropOffFilter}
+                onValueChange={(v) => setDropOffFilter(v as "all" | "pending" | "done")}
+              >
+                <SelectTrigger className="h-11">
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="all">All</SelectItem>
+                  <SelectItem value="pending">Not dropped off</SelectItem>
+                  <SelectItem value="done">Dropped off</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -1638,10 +1853,14 @@ const Invoices = () => {
                   payment_status: inv.payment_status,
                   created_at: inv.created_at,
                   amount_paid: inv.amount_paid,
+                  dropped_off_at: inv.dropped_off_at ?? null,
                   local_sync: inv.local_sync,
                   local_sync_error: inv.local_sync_error,
                   client_request_id: inv.client_request_id,
                 }))}
+                onMarkDroppedOff={(inv) =>
+                  setDropOffTarget({ id: inv.id, invoice_number: inv.invoice_number, action: "mark" })
+                }
                 onViewInvoice={(inv) => {
                   if (inv.local_sync) {
                     const local = localPendingInvoices.find((i) => i.id === inv.id);
@@ -2286,6 +2505,13 @@ const Invoices = () => {
                     value={checkAmount}
                     onChange={(e) => setCheckAmount(e.target.value)}
                   />
+                  {(Number(checkAmount) || 0) > 0 && (
+                    <Input
+                      placeholder="Check number *"
+                      value={createCheckNumber}
+                      onChange={(e) => setCreateCheckNumber(e.target.value)}
+                    />
+                  )}
                 </div>
                 <div className="space-y-2">
                   <Label>Credit</Label>
@@ -2407,7 +2633,7 @@ const Invoices = () => {
             </div>
             {payMethod === "check" && (
               <div className="space-y-2">
-                <Label>Check number</Label>
+                <Label>Check number *</Label>
                 <Input
                   className="h-11"
                   value={payCheckNumber}
@@ -2482,6 +2708,58 @@ const Invoices = () => {
                   {viewInvoice.local_sync_error ||
                     "Saved on this device only. It will upload when you’re online. PDF/email after sync."}
                 </p>
+              )}
+              {!viewInvoice.local_sync && (
+                <div
+                  className={cn(
+                    "flex flex-col gap-2 rounded-md border px-3 py-2 sm:flex-row sm:items-center sm:justify-between",
+                    viewInvoice.dropped_off_at
+                      ? "border-green-600/30 bg-green-600/5"
+                      : "border-amber-500/40 bg-amber-500/10"
+                  )}
+                >
+                  <div className="min-w-0 text-sm">
+                    {viewInvoice.dropped_off_at ? (
+                      <>
+                        <p className="font-semibold text-green-700 dark:text-green-500">Dropped off</p>
+                        <p className="text-xs text-muted-foreground">
+                          {viewInvoice.dropped_off_by
+                            ? `${personName(viewInvoice.dropped_off_by)} · ${new Date(
+                                viewInvoice.dropped_off_at
+                              ).toLocaleString()}`
+                            : "Recorded before drop-off tracking started"}
+                        </p>
+                      </>
+                    ) : (
+                      <>
+                        <p className="font-semibold text-amber-800 dark:text-amber-200">Not dropped off</p>
+                        {viewInvoice.drop_off_undone_at && (
+                          <p className="text-xs text-muted-foreground">
+                            Drop-off undone by {personName(viewInvoice.drop_off_undone_by)} ·{" "}
+                            {new Date(viewInvoice.drop_off_undone_at).toLocaleString()}
+                          </p>
+                        )}
+                      </>
+                    )}
+                  </div>
+                  {canCreate && (
+                    <Button
+                      size="sm"
+                      variant={viewInvoice.dropped_off_at ? "outline" : "default"}
+                      className="h-9 shrink-0"
+                      onClick={() =>
+                        setDropOffTarget({
+                          id: viewInvoice.id,
+                          invoice_number: viewInvoice.invoice_number,
+                          action: viewInvoice.dropped_off_at ? "undo" : "mark",
+                        })
+                      }
+                    >
+                      <Truck className="mr-1.5 h-4 w-4" />
+                      {viewInvoice.dropped_off_at ? "Undo drop-off" : "Mark dropped off"}
+                    </Button>
+                  )}
+                </div>
               )}
               {Number(viewInvoice.discount_amount || 0) > 0 && (
                 <div className="grid grid-cols-3 gap-3 rounded-md bg-muted/50 px-3 py-2">
@@ -2558,16 +2836,102 @@ const Invoices = () => {
                 <div>
                   <p className="font-medium mb-2">Payments</p>
                   <div className="space-y-1">
-                    {(viewInvoice.payments || []).map((p) => (
-                      <div key={p.id} className="flex justify-between text-muted-foreground">
-                        <span>
-                          {p.payment_method} · {p.payment_date}
-                        </span>
-                        <span className="text-foreground font-medium">
-                          ${Number(p.amount).toFixed(2)}
-                        </span>
-                      </div>
-                    ))}
+                    {(viewInvoice.payments || []).map((p) => {
+                      const bounced = Boolean(p.bounced_at);
+                      const voided = Boolean(p.voided_at);
+                      const reversed = bounced || voided;
+                      const openReversal = (action: ReversalAction) => {
+                        setBounceReason("");
+                        setBounceTarget({ paymentId: p.id, action });
+                      };
+                      return (
+                        <div
+                          key={p.id}
+                          className={cn(
+                            "rounded-md px-2 py-1",
+                            bounced && "bg-destructive/5",
+                            voided && "bg-muted/60"
+                          )}
+                        >
+                          <div className="flex items-center justify-between gap-2 text-muted-foreground">
+                            <span className={cn("min-w-0 capitalize", reversed && "line-through")}>
+                              {p.payment_method}
+                              {p.check_number ? ` #${p.check_number}` : ""} · {p.payment_date}
+                            </span>
+                            <div className="flex shrink-0 items-center gap-2">
+                              {bounced && <Badge variant="destructive">BOUNCED</Badge>}
+                              {voided && <Badge variant="secondary">VOIDED</Badge>}
+                              <span
+                                className={cn(
+                                  "font-medium",
+                                  reversed ? "text-muted-foreground line-through" : "text-foreground"
+                                )}
+                              >
+                                ${Number(p.amount).toFixed(2)}
+                              </span>
+                            </div>
+                          </div>
+                          {bounced && (
+                            <p className="text-xs text-destructive">
+                              Bounced · marked by {personName(p.bounced_by)} on{" "}
+                              {new Date(p.bounced_at!).toLocaleDateString()}
+                              {p.bounce_reason ? ` · ${p.bounce_reason}` : ""}
+                            </p>
+                          )}
+                          {voided && (
+                            <p className="text-xs text-muted-foreground">
+                              Voided by {personName(p.voided_by)} on{" "}
+                              {new Date(p.voided_at!).toLocaleDateString()}
+                              {p.void_reason ? ` · ${p.void_reason}` : ""}
+                            </p>
+                          )}
+                          {isAdmin && !viewInvoice.local_sync && (
+                            <div className="flex gap-3">
+                              {!reversed && (
+                                <Button
+                                  variant="link"
+                                  size="sm"
+                                  className="h-auto p-0 text-xs text-muted-foreground"
+                                  onClick={() => openReversal("void")}
+                                >
+                                  Void payment
+                                </Button>
+                              )}
+                              {!reversed && p.payment_method === "check" && (
+                                <Button
+                                  variant="link"
+                                  size="sm"
+                                  className="h-auto p-0 text-xs text-destructive"
+                                  onClick={() => openReversal("bounce")}
+                                >
+                                  Mark bounced
+                                </Button>
+                              )}
+                              {bounced && (
+                                <Button
+                                  variant="link"
+                                  size="sm"
+                                  className="h-auto p-0 text-xs text-muted-foreground"
+                                  onClick={() => openReversal("unbounce")}
+                                >
+                                  Undo bounce
+                                </Button>
+                              )}
+                              {voided && (
+                                <Button
+                                  variant="link"
+                                  size="sm"
+                                  className="h-auto p-0 text-xs text-muted-foreground"
+                                  onClick={() => openReversal("unvoid")}
+                                >
+                                  Undo void
+                                </Button>
+                              )}
+                            </div>
+                          )}
+                        </div>
+                      );
+                    })}
                   </div>
                 </div>
               )}
@@ -2681,6 +3045,225 @@ const Invoices = () => {
                 : deleteConfirmStep === 1
                   ? "Delete"
                   : "Yes, delete"}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <AlertDialog
+        open={!!bounceTarget}
+        onOpenChange={(open) => {
+          if (!open && !bounceMutation.isPending) {
+            setBounceTarget(null);
+            setBounceReason("");
+          }
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {
+                {
+                  bounce: `Mark check${checkGroup?.check_number ? ` #${checkGroup.check_number}` : ""} as bounced?`,
+                  unbounce: `Undo bounce for check${checkGroup?.check_number ? ` #${checkGroup.check_number}` : ""}?`,
+                  void: "Void this payment?",
+                  unvoid: "Undo void for this payment?",
+                }[bounceTarget?.action ?? "bounce"]
+              }
+            </AlertDialogTitle>
+            <AlertDialogDescription asChild>
+              <div className="space-y-3 text-sm">
+                {checkGroupLoading || !checkGroup ? (
+                  <p>Loading payment details…</p>
+                ) : (
+                  <>
+                    <p className="capitalize">
+                      {checkGroup.payment_method}
+                      {checkGroup.check_number ? ` #${checkGroup.check_number}` : ""} · $
+                      {checkGroup.total.toFixed(2)} · {checkGroup.payment_date}
+                    </p>
+                    <p>
+                      {checkGroup.shop_name}
+                      {isVoidAction && checkGroup.recorded_by
+                        ? ` · recorded by ${personName(checkGroup.recorded_by)}`
+                        : ""}
+                    </p>
+                    <div className="rounded-md border">
+                      {checkGroup.payments.map((p) => (
+                        <div
+                          key={p.payment_id}
+                          className="flex justify-between border-b px-3 py-1.5 last:border-b-0"
+                        >
+                          <span>{p.invoice_number}</span>
+                          <span className="font-medium text-foreground">${p.amount.toFixed(2)}</span>
+                        </div>
+                      ))}
+                    </div>
+                    <p>
+                      {isUndoAction
+                        ? "These payments will count as paid again."
+                        : checkGroup.payments.length > 1
+                          ? `This ${isVoidAction ? "payment" : "check"} was applied to all of these invoices. All of them go back to unpaid for this amount.`
+                          : `This payment will stop counting as paid. It stays in the history marked ${isVoidAction ? "VOIDED" : "BOUNCED"}.`}
+                    </p>
+                    {(bounceTarget?.action === "bounce" || bounceTarget?.action === "void") && (
+                      <div className="space-y-1">
+                        <Label htmlFor="bounce-reason">
+                          {bounceTarget.action === "void" ? "Reason *" : "Reason (optional)"}
+                        </Label>
+                        <Textarea
+                          id="bounce-reason"
+                          rows={2}
+                          placeholder={
+                            bounceTarget.action === "void"
+                              ? "e.g. Recorded on wrong shop"
+                              : "e.g. Insufficient funds"
+                          }
+                          value={bounceReason}
+                          onChange={(e) => setBounceReason(e.target.value)}
+                        />
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={bounceMutation.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              className={
+                bounceTarget?.action === "bounce" || bounceTarget?.action === "void"
+                  ? "bg-destructive text-destructive-foreground hover:bg-destructive/90"
+                  : undefined
+              }
+              disabled={
+                bounceMutation.isPending ||
+                !checkGroup ||
+                !bounceTarget ||
+                (bounceTarget.action === "void" && !bounceReason.trim())
+              }
+              onClick={(e) => {
+                e.preventDefault();
+                if (bounceTarget) bounceMutation.mutate({ ...bounceTarget, reason: bounceReason });
+              }}
+            >
+              {bounceMutation.isPending
+                ? "Saving..."
+                : {
+                    bounce: "Mark bounced",
+                    unbounce: "Undo bounce",
+                    void: "Void payment",
+                    unvoid: "Undo void",
+                  }[bounceTarget?.action ?? "bounce"]}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
+
+      <Dialog open={bouncedListOpen} onOpenChange={setBouncedListOpen}>
+        <DialogContent className="max-h-[85vh] max-w-3xl overflow-y-auto">
+          <DialogHeader>
+            <DialogTitle>Reversed payments</DialogTitle>
+          </DialogHeader>
+          {bouncedChecksLoading ? (
+            <p className="text-sm text-muted-foreground">Loading…</p>
+          ) : bouncedChecks.length === 0 ? (
+            <p className="text-sm text-muted-foreground">No bounced or voided payments.</p>
+          ) : (
+            <div className="rounded-md border overflow-x-auto">
+              <Table>
+                <TableHeader>
+                  <TableRow>
+                    <TableHead>Type</TableHead>
+                    <TableHead>Shop</TableHead>
+                    <TableHead>Payment</TableHead>
+                    <TableHead>Paid on</TableHead>
+                    <TableHead>Invoice</TableHead>
+                    <TableHead className="text-right">Amount</TableHead>
+                    <TableHead>By</TableHead>
+                    <TableHead>Reason</TableHead>
+                    <TableHead />
+                  </TableRow>
+                </TableHeader>
+                <TableBody>
+                  {bouncedChecks.map((row) => (
+                    <TableRow key={row.payment_id}>
+                      <TableCell>
+                        {row.kind === "bounced" ? (
+                          <Badge variant="destructive">Bounced</Badge>
+                        ) : (
+                          <Badge variant="secondary">Voided</Badge>
+                        )}
+                      </TableCell>
+                      <TableCell className="font-medium">{row.shop_name}</TableCell>
+                      <TableCell className="capitalize">
+                        {row.payment_method}
+                        {row.check_number ? ` #${row.check_number}` : ""}
+                      </TableCell>
+                      <TableCell>{row.payment_date}</TableCell>
+                      <TableCell>{row.invoice_number}</TableCell>
+                      <TableCell className="text-right">${row.amount.toFixed(2)}</TableCell>
+                      <TableCell className="text-xs text-muted-foreground">
+                        {personName(row.reversed_by)}
+                        <br />
+                        {new Date(row.reversed_at).toLocaleDateString()}
+                      </TableCell>
+                      <TableCell className="text-xs">{row.reason || "-"}</TableCell>
+                      <TableCell>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            setBouncedListOpen(false);
+                            void openInvoiceDetails(row.invoice_id);
+                          }}
+                        >
+                          View
+                        </Button>
+                      </TableCell>
+                    </TableRow>
+                  ))}
+                </TableBody>
+              </Table>
+            </div>
+          )}
+        </DialogContent>
+      </Dialog>
+
+      <AlertDialog
+        open={!!dropOffTarget}
+        onOpenChange={(open) => {
+          if (!open && !dropOffMutation.isPending) setDropOffTarget(null);
+        }}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {dropOffTarget?.action === "undo"
+                ? `Undo drop-off for ${dropOffTarget?.invoice_number}?`
+                : `Mark ${dropOffTarget?.invoice_number} as dropped off?`}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {dropOffTarget?.action === "undo"
+                ? "It will show as Not dropped off again. Your name and the time are recorded."
+                : "Confirm the goods were delivered to the shop. Your name and the time are recorded."}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={dropOffMutation.isPending}>Cancel</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={dropOffMutation.isPending || !dropOffTarget}
+              onClick={(e) => {
+                e.preventDefault();
+                if (dropOffTarget) dropOffMutation.mutate(dropOffTarget);
+              }}
+            >
+              {dropOffMutation.isPending
+                ? "Saving..."
+                : dropOffTarget?.action === "undo"
+                  ? "Undo drop-off"
+                  : "Confirm"}
             </AlertDialogAction>
           </AlertDialogFooter>
         </AlertDialogContent>

@@ -18,7 +18,8 @@ services:
     build: ./backend
     restart: unless-stopped
     environment:
-      DATABASE_URL: postgresql+psycopg://mrfog:${DB_PASSWORD}@db:5432/concept_foundry
+      # Written by scripts/deploy-ec2-app.ps1: the db container, or RDS once DB_TARGET=rds.
+      DATABASE_URL: ${DATABASE_URL}
       SECRET_KEY: ${SECRET_KEY}
       ENVIRONMENT: production
       CORS_ORIGINS: ${CORS_ORIGINS}

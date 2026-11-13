@@ -79,6 +79,9 @@ export const DistributePaymentDialog = ({
       if (!shopId) {
         throw { message: "Shop is required" } satisfies ApiError;
       }
+      if (paymentMethod === "check" && !checkNumber.trim()) {
+        throw { message: "Enter the check number" } satisfies ApiError;
+      }
 
       return api<{ payments_created: number; amount_applied: number }>("/payments/distribute", {
         method: "POST",
@@ -189,7 +192,7 @@ export const DistributePaymentDialog = ({
 
           {paymentMethod === "check" && (
             <div className="space-y-2">
-              <Label>Check Number</Label>
+              <Label>Check Number *</Label>
               <Input
                 placeholder="Enter check number"
                 value={checkNumber}

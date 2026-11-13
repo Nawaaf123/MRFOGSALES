@@ -12,6 +12,7 @@ from app.models import (
     AppRole,
     Invoice,
     InvoiceItem,
+    PAYMENT_COUNTS,
     Payment,
     PaymentStatus,
     Product,
@@ -268,7 +269,7 @@ def _outstanding_for_invoices(db: Session, invoices: list[Invoice]) -> tuple[flo
         invoice_id: float(total or 0)
         for invoice_id, total in (
             db.query(Payment.invoice_id, func.coalesce(func.sum(Payment.amount), 0))
-            .filter(Payment.invoice_id.in_(ids))
+            .filter(Payment.invoice_id.in_(ids), PAYMENT_COUNTS)
             .group_by(Payment.invoice_id)
             .all()
         )
@@ -300,6 +301,7 @@ def tool_payments_summary(
     pay_q = db.query(func.coalesce(func.sum(Payment.amount), 0)).filter(
         Payment.payment_date >= start,
         Payment.payment_date <= end,
+        PAYMENT_COUNTS,
     )
     if role_of(user) not in _STAFF_ROLES:
         pay_q = pay_q.filter(Payment.created_by == user.id)
@@ -931,7 +933,7 @@ def tool_focus_recommendations(db: Session, user: User, *, limit: int = 8) -> di
             invoice_id: float(total or 0)
             for invoice_id, total in (
                 db.query(Payment.invoice_id, func.coalesce(func.sum(Payment.amount), 0))
-                .filter(Payment.invoice_id.in_(ids))
+                .filter(Payment.invoice_id.in_(ids), PAYMENT_COUNTS)
                 .group_by(Payment.invoice_id)
                 .all()
             )

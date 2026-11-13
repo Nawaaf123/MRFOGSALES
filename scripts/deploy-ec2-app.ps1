@@ -26,6 +26,8 @@ try {
   $ErrorActionPreference = "Continue"
   $BackupBucket = (terraform output -raw db_backup_bucket 2>$null)
   if ($LASTEXITCODE -ne 0) { $BackupBucket = "" }
+  $RdsHost = (terraform output -raw rds_address 2>$null)
+  if ($LASTEXITCODE -ne 0) { $RdsHost = "" }
   $ErrorActionPreference = $prevOut
 }
 finally {
@@ -54,6 +56,8 @@ $EmailFrom = if ($env:EMAIL_FROM) { $env:EMAIL_FROM } else { "Sales <onboarding@
 $MapboxToken = if ($env:VITE_MAPBOX_TOKEN) { $env:VITE_MAPBOX_TOKEN } else { "" }
 $OpenAiKey = if ($env:OPENAI_API_KEY) { $env:OPENAI_API_KEY } else { "" }
 $OpenAiModel = if ($env:OPENAI_MODEL) { $env:OPENAI_MODEL } else { "gpt-4o-mini" }
+# "local" = Postgres container on the EC2 host; "rds" = managed RDS (set after the cutover).
+$DbTarget = if ($env:DB_TARGET) { $env:DB_TARGET } else { "local" }
 if (Test-Path $SecretsFile) {
   Get-Content $SecretsFile | ForEach-Object {
     $line = $_.Trim()
@@ -66,9 +70,18 @@ if (Test-Path $SecretsFile) {
       "MAPBOX_ACCESS_TOKEN" { if ($value.Trim()) { $MapboxToken = $value.Trim() } }
       "OPENAI_API_KEY" { if ($value.Trim()) { $OpenAiKey = $value.Trim() } }
       "OPENAI_MODEL" { if ($value.Trim()) { $OpenAiModel = $value.Trim() } }
+      "DB_TARGET" { if ($value.Trim()) { $DbTarget = $value.Trim().ToLower() } }
     }
   }
 }
+if ($DbTarget -eq "rds") {
+  if (-not $RdsHost) { throw "DB_TARGET=rds but terraform output rds_address is missing." }
+  $DatabaseUrl = "postgresql+psycopg://mrfog:${DbPass}@${RdsHost}:5432/concept_foundry?sslmode=require"
+} else {
+  $DbTarget = "local"
+  $DatabaseUrl = "postgresql+psycopg://mrfog:${DbPass}@db:5432/concept_foundry"
+}
+Write-Host "Database: $DbTarget"
 Write-Host "Resend:  $(if ($ResendKey) { 'configured' } else { 'MISSING' })"
 Write-Host "Mapbox:  $(if ($MapboxToken) { 'configured' } else { 'MISSING' })"
 Write-Host "OpenAI:  $(if ($OpenAiKey) { 'configured' } else { 'MISSING' })"
@@ -195,6 +208,7 @@ $envScript = @"
 set -e
 cat > /opt/mrfogsales/.env <<'EOF'
 DB_PASSWORD=$DbPass
+DATABASE_URL=$DatabaseUrl
 SECRET_KEY=$AppSecret
 CORS_ORIGINS=$CorsOriginsCsv
 SEED_ADMIN_EMAIL=$AdminEmail
@@ -226,6 +240,7 @@ Invoke-RemoteBash $up
 
 if ($BackupBucket) {
   Write-Host "Installing daily Postgres -> S3 backup (bucket: $BackupBucket)..."
+  $BackupPgHost = if ($DbTarget -eq "rds") { $RdsHost } else { "" }
   $backupInstall = @"
 set -e
 dnf install -y awscli cronie >/dev/null
@@ -234,8 +249,10 @@ sed -i 's/\r$//' /opt/mrfogsales/scripts/ec2-pg-backup.sh
 install -m 0755 /opt/mrfogsales/scripts/ec2-pg-backup.sh /usr/local/bin/mrfogsales-pg-backup
 cat > /etc/mrfogsales-backup.env <<'EOF'
 BACKUP_S3_BUCKET=$BackupBucket
+BACKUP_PG_HOST=$BackupPgHost
+BACKUP_PG_PASSWORD=$DbPass
 EOF
-chmod 0644 /etc/mrfogsales-backup.env
+chmod 0600 /etc/mrfogsales-backup.env
 cat > /etc/cron.d/mrfogsales-db-backup <<'EOF'
 # Daily logical Postgres dump to S3 at 08:00 UTC
 SHELL=/bin/bash

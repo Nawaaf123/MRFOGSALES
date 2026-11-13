@@ -11,6 +11,7 @@ import {
   Loader2,
   RefreshCw,
   Pencil,
+  Truck,
 } from "lucide-react";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
@@ -34,6 +35,7 @@ export type ShopGroupInvoice = {
   payment_status: "paid" | "partial" | "unpaid";
   created_at: string;
   amount_paid: number;
+  dropped_off_at?: string | null;
   /** Present when this row is a local offline create waiting to upload. */
   local_sync?: "pending" | "syncing" | "failed";
   local_sync_error?: string | null;
@@ -52,6 +54,7 @@ interface ShopInvoiceGroupProps {
   sendingEmailId: string | null;
   onDeleteInvoice: (invoice: ShopGroupInvoice) => void;
   onEditInvoice?: (invoice: ShopGroupInvoice) => void;
+  onMarkDroppedOff?: (invoice: ShopGroupInvoice) => void;
   onRetryLocalSync?: (invoice: ShopGroupInvoice) => void;
   onDiscardLocalSync?: (invoice: ShopGroupInvoice) => void;
   onDistributePayment: (
@@ -83,6 +86,7 @@ export const ShopInvoiceGroup = ({
   sendingEmailId,
   onDeleteInvoice,
   onEditInvoice,
+  onMarkDroppedOff,
   onRetryLocalSync,
   onDiscardLocalSync,
   onDistributePayment,
@@ -134,6 +138,19 @@ export const ShopInvoiceGroup = ({
     );
   };
 
+  const getDropOffBadge = (invoice: ShopGroupInvoice) => {
+    if (invoice.local_sync) return null;
+    return invoice.dropped_off_at ? (
+      <Badge className="border-transparent bg-green-600/15 text-green-700 hover:bg-green-600/15 dark:text-green-500">
+        Dropped off
+      </Badge>
+    ) : (
+      <Badge className="border-transparent bg-amber-500/15 text-amber-800 hover:bg-amber-500/15 dark:text-amber-200">
+        Not dropped off
+      </Badge>
+    );
+  };
+
   const serverInvoices = invoices.filter((inv) => !inv.local_sync);
   const totalAmount = invoices.reduce((sum, inv) => sum + Number(inv.total_amount), 0);
   const totalPending = serverInvoices.reduce((sum, inv) => sum + pendingOf(inv), 0);
@@ -147,7 +164,8 @@ export const ShopInvoiceGroup = ({
   const actionButtons = (invoice: ShopGroupInvoice, outline: boolean) => {
     const variant = outline ? "outline" : "ghost";
     const pending = pendingOf(invoice);
-    const btnClass = outline ? "h-10 min-w-10 flex-1 sm:flex-none" : "h-8 w-8 p-0";
+    // Phone cards: fixed-size icon buttons that wrap instead of shrinking, so nothing overlaps.
+    const btnClass = outline ? "h-9 w-9 shrink-0 p-0" : "h-8 w-8 p-0";
     const showEdit = Boolean(canEditInvoice?.(invoice) && onEditInvoice);
     const showDelete = typeof canDelete === "function" ? canDelete(invoice) : canDelete;
 
@@ -156,7 +174,7 @@ export const ShopInvoiceGroup = ({
         <>
           <Button variant={variant} size="sm" className={btnClass} onClick={() => onViewInvoice(invoice)} title="View">
             <Eye className="h-4 w-4" />
-            {outline && <span className="ml-1 sm:hidden text-xs">View</span>}
+            {outline && <span className="sr-only">View</span>}
           </Button>
           {canManage && (
             <Button
@@ -172,7 +190,7 @@ export const ShopInvoiceGroup = ({
               ) : (
                 <RefreshCw className="h-4 w-4" />
               )}
-              {outline && <span className="ml-1 sm:hidden text-xs">Sync</span>}
+              {outline && <span className="sr-only">Sync</span>}
             </Button>
           )}
           {canManage && (
@@ -184,7 +202,7 @@ export const ShopInvoiceGroup = ({
               title="Remove from queue"
             >
               <Trash2 className="h-4 w-4 text-destructive" />
-              {outline && <span className="ml-1 sm:hidden text-xs text-destructive">Remove</span>}
+              {outline && <span className="sr-only text-destructive">Remove</span>}
             </Button>
           )}
         </>
@@ -195,7 +213,7 @@ export const ShopInvoiceGroup = ({
       <>
         <Button variant={variant} size="sm" className={btnClass} onClick={() => onViewInvoice(invoice)} title="View">
           <Eye className="h-4 w-4" />
-          {outline && <span className="ml-1 sm:hidden text-xs">View</span>}
+          {outline && <span className="sr-only">View</span>}
         </Button>
         {showEdit && (
           <Button
@@ -206,7 +224,19 @@ export const ShopInvoiceGroup = ({
             title="Edit line items"
           >
             <Pencil className="h-4 w-4" />
-            {outline && <span className="ml-1 sm:hidden text-xs">Edit</span>}
+            {outline && <span className="sr-only">Edit</span>}
+          </Button>
+        )}
+        {canManage && onMarkDroppedOff && !invoice.dropped_off_at && (
+          <Button
+            variant={variant}
+            size="sm"
+            className={btnClass}
+            onClick={() => onMarkDroppedOff(invoice)}
+            title="Mark dropped off"
+          >
+            <Truck className="h-4 w-4 text-amber-600" />
+            {outline && <span className="sr-only">Drop off</span>}
           </Button>
         )}
         {canManage && pending > 0.01 && (
@@ -218,7 +248,7 @@ export const ShopInvoiceGroup = ({
             title="Record Payment"
           >
             <DollarSign className="h-4 w-4" />
-            {outline && <span className="ml-1 sm:hidden text-xs">Pay</span>}
+            {outline && <span className="sr-only">Pay</span>}
           </Button>
         )}
         <Button
@@ -229,7 +259,7 @@ export const ShopInvoiceGroup = ({
           title="Export PDF"
         >
           <Download className="h-4 w-4" />
-          {outline && <span className="ml-1 sm:hidden text-xs">PDF</span>}
+          {outline && <span className="sr-only">PDF</span>}
         </Button>
         {canManage && (
           <Button
@@ -245,7 +275,7 @@ export const ShopInvoiceGroup = ({
             ) : (
               <Mail className="h-4 w-4" />
             )}
-            {outline && <span className="ml-1 sm:hidden text-xs">Email</span>}
+            {outline && <span className="sr-only">Email</span>}
           </Button>
         )}
         {showDelete && (
@@ -257,7 +287,7 @@ export const ShopInvoiceGroup = ({
             title="Delete Invoice"
           >
             <Trash2 className="h-4 w-4 text-destructive" />
-            {outline && <span className="ml-1 sm:hidden text-xs text-destructive">Del</span>}
+            {outline && <span className="sr-only text-destructive">Delete</span>}
           </Button>
         )}
       </>
@@ -337,43 +367,40 @@ export const ShopInvoiceGroup = ({
 
       {isExpanded && (
         <>
-          <div className="md:hidden p-3 space-y-3">
+          <div className="md:hidden p-2 space-y-2">
             {invoices.map((invoice) => {
               const pendingAmount = pendingOf(invoice);
               return (
                 <Card key={invoice.id}>
-                  <CardContent className="p-3">
-                    <div className="flex justify-between items-start mb-2">
-                      <div>
-                        <p className="font-semibold">{invoice.invoice_number}</p>
-                        <p className="text-xs text-muted-foreground">
+                  <CardContent className="p-2.5">
+                    <div className="flex items-center justify-between gap-2">
+                      <p className="min-w-0 truncate text-sm font-semibold leading-tight">
+                        {invoice.invoice_number}
+                        <span className="ml-1.5 text-[11px] font-normal text-muted-foreground">
                           {new Date(invoice.created_at).toLocaleDateString()}
-                        </p>
-                      </div>
-                      {getStatusBadge(invoice)}
+                        </span>
+                      </p>
+                      <div className="shrink-0">{getStatusBadge(invoice)}</div>
                     </div>
-
-                    <div className="grid grid-cols-2 gap-2 text-sm mb-3">
-                      <div>
-                        <span className="text-muted-foreground">Amount</span>
-                        <p className="font-semibold">${Number(invoice.total_amount).toFixed(2)}</p>
-                      </div>
-                      <div>
-                        <span className="text-muted-foreground">Pending</span>
-                        <p
-                          className={`font-semibold tabular-nums ${
+                    <div className="mt-1 flex items-center justify-between gap-2">
+                      <p className="min-w-0 whitespace-nowrap text-xs tabular-nums">
+                        <span className="font-semibold">${Number(invoice.total_amount).toFixed(2)}</span>
+                        <span className="text-muted-foreground"> · Pending </span>
+                        <span
+                          className={`font-semibold ${
                             pendingAmount > 0 ? "text-primary" : "text-muted-foreground"
                           }`}
                         >
                           ${pendingAmount.toFixed(2)}
-                        </p>
-                      </div>
+                        </span>
+                      </p>
+                      <div className="shrink-0">{getDropOffBadge(invoice)}</div>
                     </div>
                     {invoice.local_sync_error && (
-                      <p className="mb-2 text-xs text-destructive">{invoice.local_sync_error}</p>
+                      <p className="mt-1 text-xs text-destructive">{invoice.local_sync_error}</p>
                     )}
 
-                    <div className="flex flex-wrap gap-1 border-t pt-2">
+                    <div className="mt-2 flex flex-wrap gap-1 border-t pt-2">
                       {actionButtons(invoice, true)}
                     </div>
                   </CardContent>
@@ -391,6 +418,7 @@ export const ShopInvoiceGroup = ({
                   <TableHead>Amount</TableHead>
                   <TableHead>Pending</TableHead>
                   <TableHead>Status</TableHead>
+                  <TableHead>Drop-off</TableHead>
                   <TableHead>Created By</TableHead>
                   <TableHead className="text-right">Actions</TableHead>
                 </TableRow>
@@ -422,6 +450,7 @@ export const ShopInvoiceGroup = ({
                           )}
                         </div>
                       </TableCell>
+                      <TableCell>{getDropOffBadge(invoice)}</TableCell>
                       <TableCell>{creatorName(invoice.created_by)}</TableCell>
                       <TableCell className="text-right">
                         <div className="flex justify-end gap-1">{actionButtons(invoice, false)}</div>

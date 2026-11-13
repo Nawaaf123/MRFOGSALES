@@ -21,6 +21,7 @@ export type InvoiceCreateDraft = {
   items: InvoiceCreateDraftItem[];
   cash_amount: string;
   check_amount: string;
+  check_number?: string;
   credit_amount: string;
   updated_at: string;
 };
